@@ -17,6 +17,7 @@ from schemas.flights.schema import gen_flights_1B_schema
 from schemas.imdb.schema import gen_job_light_imdb_schema
 from schemas.ssb.schema import gen_500gb_ssb_schema
 from schemas.tpc_ds.schema import gen_1t_tpc_ds_schema
+from schemas.tpc_h.schema import gen_tpc_h_schema
 
 np.random.seed(1)
 
@@ -121,6 +122,8 @@ if __name__ == '__main__':
         schema = gen_flights_1B_schema(table_csv_path)
     elif args.dataset == 'tpc-ds-1t':
         schema = gen_1t_tpc_ds_schema(table_csv_path)
+    elif args.dataset == 'tpc-h':
+        schema = gen_tpc_h_schema(table_csv_path)
     else:
         raise ValueError('Dataset unknown')
 
