@@ -148,6 +148,7 @@ class JoinDataPreparator:
         if self.cached_tables.get(path) is not None:
             return self.cached_tables[path]
 
+        logger.info(f'Loading HDF from {path}')
         table_data = pd.read_hdf(path, key='df')
 
         # drop irrelevant attributes
@@ -671,9 +672,13 @@ def prepare_sample_hdf(schema, hdf_path, max_table_data, sample_size):
                     left_attribute = relationship_obj.end + '.' + relationship_obj.end_attr
                     right_attribute = relationship_obj.start + '.' + relationship_obj.start_attr
 
+                    # Pandas does not allow any ambiguities anymore
+                    left_index_attribute = '_' + left_attribute
+                    #right_index_attribute = '_' + right_attribute
+
                     df_samples = df_sample_cache[relationship_obj.end]
                     df_samples = df_samples.set_index(left_attribute, drop=False)
-                    # df_samples.index.name = None
+                    df_samples.index.name = left_index_attribute
                     next_table_data = next_table_data.set_index(right_attribute, drop=False)
                     next_table_data = df_samples.merge(next_table_data, right_index=True, left_on=left_attribute)
                     # only keep rows with join partner
