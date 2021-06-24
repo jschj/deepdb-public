@@ -10,9 +10,13 @@ from rspn.structure.base import Sum
 from rspn.structure.leaves import Categorical, IdentityNumericLeaf
 from schemas.tpc_h.schema import gen_tpc_h_schema
 from data_preparation.prepare_single_tables import read_table_csv
+from ensemble_compilation.physical_db import DBConnection
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
+import argparse
+import psycopg2
 
 # the first attribute seems to be dropped
 ATTRIBUTES = ['orderkey', 'partkey', 'suppkey', 'linenumber', 'quantity', 'extendedprices',
@@ -73,12 +77,20 @@ def plot_distributions(node):
     if isinstance(node, IdentityNumericLeaf):
         size = len(node.unique_vals)
 
-        if size >= 100:
+        if size > 256:
             plt.figure()
+            
+            probs = node.return_histogram()
+            hist, bin_edges = np.histogram(a=probs, bins=256, density=True)
+            hist = hist / np.sum(hist)
+            print(f'hist sum = {np.sum(hist)}')
+            #print(f'hist={hist} bin_edges={bin_edges}')
+            plt.hist(hist, bins=256)
+
             xs = node.unique_vals
             ys = node.return_histogram()
-            #print(node.mean)
             plt.scatter(xs, ys, s=0.1)
+
             plt.show()
 
             scope = node.scope
@@ -86,7 +98,7 @@ def plot_distributions(node):
     elif isinstance(node, Categorical):
         size = len(node.p)
 
-        if size >= 100:
+        if size > 256:
             #plt.figure()
             #xs = range(size)
             #ys = node.p
@@ -101,9 +113,79 @@ def plot_distributions(node):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) <= 2:
-        print(f'Usage: python3 {__file__} <pickle file path> <data csv path>')
-        sys.exit()
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--dataset', default='abc', help='Which dataset to be used')
+    parser.add_argument('--pickle_path', default='', help='Pickle file path')
+    parser.add_argument('--csv_path', default='', help='CSV file path')
+    parser.add_argument('--populate_postgres', help='Load dataset into postgres database')
+
+    args = parser.parse_args()
+
+    print(f'dataset={args.dataset}')
+
+    if args.dataset == 'tpc-h':
+        schema = gen_tpc_h_schema(args.csv_path)
+    else:
+        raise ValueError('Dataset unknown')
+
+    connection = psycopg2.connect(user='postgres',
+                                  password='postgres',
+                                  host='localhost',
+                                  port='5432',
+                                  database='tpc_h')
+
+    for table in schema.tables:
+        #print(f'Loading CSV file for {table.table_name}...')
+        #table_data: pd.DataFrame = read_table_csv(table, csv_seperator=';')
+        #print('Done')
+
+        print('Creating table...')
+
+        # 1;1;67310;7311;2;36.0;45983.16;0.09;0.06;2;0;829260000;825462000;829951200;3;4
+
+        attr_types = {
+            'id': 'bigint',
+            'orderkey': 'bigint',
+            'partkey': 'bigint',
+            'suppkey': 'bigint',
+            'linenumber': 'smallint',
+            'quantity': 'numeric(8, 3)',
+            'extendedprices': 'numeric(12, 3)',
+            'discount': 'numeric(8, 3)',
+            'tax': 'numeric(8, 3)',
+            'returnflag': 'smallint',
+            'linestatus': 'smallint',
+            'shipdate': 'bigint',
+            'commitdate': 'bigint',
+            'receiptdate': 'bigint',
+            'shipinstruct': 'smallint',
+            'shipmode': 'smallint'
+        }
+
+        attributes = ', '.join(f'{attr} {attr_types[attr]}' for attr in table.attributes)
+        sql_cmd = f'CREATE TABLE {table.table_name} ({attributes})'
+
+        print(f'Executing {sql_cmd}')
+        try:
+            cursor = connection.cursor()
+            cursor.execute(sql_cmd)
+            connection.commit()
+        except Exception as e:
+            print(e)
+        print('Done')
+
+        print(f'Inserting data...')
+
+        with open(args.csv_path, 'r') as file:
+            cursor = connection.cursor()
+            cursor.copy_from(file, table.table_name, sep=';')
+            connection.commit()
+
+        print('Done')
+
+
+    sys.exit()
 
     pkl_path = sys.argv[1]
     csv_path = sys.argv[2]

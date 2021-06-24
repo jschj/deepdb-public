@@ -1,6 +1,7 @@
 import numpy as np
 from spn.structure.Base import Leaf
 from spn.structure.leaves.parametric.Parametric import Parametric
+from spn.structure.leaves.histogram.Histograms import Histogram
 
 
 class Categorical(Parametric):
@@ -374,3 +375,16 @@ def categorical_distinct_ranges(node, data, dtype=np.float64, **kwargs):
 
     return _convert_to_single_tuple_set(node.scope[0],
                                         set(np.where(node.p > 0)[0]).intersection(ranges[0].possible_values))
+
+
+class IdentityNumericLeafHistogram(Histogram):
+    """
+    IdentityNumericLeaf can get very large. We offer a new node type which takes the IdentityNumericLeaf and converts
+    it into a compressed Histogram.
+    """
+
+    def __init__(self, leaf: IdentityNumericLeaf, bins=100, max_prob_error=1e-3):
+        #probs = leaf.return_histogram()
+        #hist, bin_edges = np.histogram(probs, bins=bins)
+        #Histogram.__init__(self, breaks=bin_edges, densities=hist, bin_repr_points=???, scope=leaf.scope)
+        pass

@@ -84,7 +84,6 @@ def build_ds_context(column_names, meta_types, null_values, table_meta_data, no_
 class RSPN:
 
     def __init__(self, meta_types, null_values, full_sample_size, column_names=None, table_meta_data=None):
-
         self.meta_types = meta_types
         self.null_values = null_values
         self.full_sample_size = full_sample_size
