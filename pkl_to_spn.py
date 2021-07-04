@@ -1,6 +1,7 @@
 from ensemble_compilation.graph_representation import Table
 import pickle
 import sys
+import math
 
 from spn.io.Text import spn_to_str_ref_graph
 from spn.io.Graphics import plot_spn, plot_spn2
@@ -56,10 +57,18 @@ def identity_numeric_leaf_to_str(node, feature_names, node_to_str):
     return f'{str(node)} IdentityNumericLeaf([{scope}], size={size})\n'
 
 
+def histogram_to_str(node, feature_names, node_to_str):
+    scope = ','.join(scope_to_attributes(node.scope))
+    breaks = ','.join(f'{b}.' for b in node.breaks)
+    probabilities = ','.join(str(d) for d in node.densities)
+    return f'{str(node)} Histogram({scope}|[{breaks}];[{probabilities}])\n'
+
+
 node_to_str = {
     Sum: sum_to_str,
     Categorical: categorical_to_str,
-    IdentityNumericLeaf: identity_numeric_leaf_to_str
+    IdentityNumericLeaf: identity_numeric_leaf_to_str,
+    Histogram: histogram_to_str
 }
 
 # make things ready for xspn
@@ -112,23 +121,59 @@ def plot_distributions(node):
             plot_distributions(child)
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
+def reshape_histogram(alphas, m):
+    betas = []
+    n = len(alphas)
 
-    parser.add_argument('--dataset', default='abc', help='Which dataset to be used')
-    parser.add_argument('--pickle_path', default='', help='Pickle file path')
-    parser.add_argument('--csv_path', default='', help='CSV file path')
-    parser.add_argument('--populate_postgres', help='Load dataset into postgres database')
+    for i in range(m):
+        li = n / m * i
+        hi = n / m * (i + 1)
 
-    args = parser.parse_args()
+        complete_alphas = sum(alphas[math.ceil(li) : math.floor(hi) + 1])
+        front_alphas = (math.ceil(li) - li) * alphas[math.floor(li)]
+        
+        if hi < n:
+            back_alphas = (hi - math.floor(hi)) * alphas[math.floor(hi)]
+        else:
+            back_alphas = 0
 
-    print(f'dataset={args.dataset}')
+        betas.append(complete_alphas + front_alphas + back_alphas)
 
-    if args.dataset == 'tpc-h':
-        schema = gen_tpc_h_schema(args.csv_path)
+    return betas
+
+
+def convert_spn(node):
+    if isinstance(node, IdentityNumericLeaf):
+        size = len(node.unique_vals)
+        points = [] # TODO: What's this?
+
+        if size > 256:
+            #print(f'IdentityNumericLeaf size={size} scope={scope_to_attributes(node.scope)}')
+            #densities, breaks = np.histogram(node.return_histogram(), bins=256, density=True)
+            densities = reshape_histogram(node.return_histogram(), 256)
+            breaks = list(range(256 + 1))
+
+            #print(f'hist={node.return_histogram()}')
+            #print(f'breaks={breaks}')
+        else:
+            breaks = list(range(size + 1))
+            densities = node.return_histogram(copy=True)
+        
+        #breaks = list(range(256))
+        #densities = [0.1] * 10
+
+        histogram = Histogram(breaks=breaks, densities=densities, bin_repr_points=points, scope=node.scope)
+        histogram.id = node.id
+
+        return histogram
     else:
-        raise ValueError('Dataset unknown')
+        for i in range(len(node.children)):
+            node.children[i] = convert_spn(node.children[i])
 
+        return node
+
+
+def fill_database(schema):
     connection = psycopg2.connect(user='postgres',
                                   password='postgres',
                                   host='localhost',
@@ -185,31 +230,48 @@ if __name__ == '__main__':
         print('Done')
 
 
-    sys.exit()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
 
-    pkl_path = sys.argv[1]
-    csv_path = sys.argv[2]
+    parser.add_argument('--dataset', default='abc', help='Which dataset to be used')
+    parser.add_argument('--pickle_path', default='', help='Pickle file path')
+    parser.add_argument('--csv_path', default='', help='CSV file path')
+    parser.add_argument('--populate_postgres', help='Load dataset into postgres database')
 
-    schema = gen_tpc_h_schema(csv_path)
+    args = parser.parse_args()
+
+    if args.dataset == 'tpc-h':
+        schema = gen_tpc_h_schema(args.csv_path)
+    else:
+        raise ValueError('Dataset unknown')
+
+    if args.populate_postgres:
+        print('Filling database!')
+        fill_database(schema)
+        sys.exit()
+
+    schema = gen_tpc_h_schema(args.csv_path)
     table: Table = schema.tables[0]
 
-    table_data: pd.DataFrame = read_table_csv(table, csv_seperator=';')
+    #table_data: pd.DataFrame = read_table_csv(table, csv_seperator=';')
 
-    for col in table_data.columns:
-        unique = pd.unique(table_data[col])
+    #for col in table_data.columns:
+    #    unique = pd.unique(table_data[col])
         #print(f'{col}: {len(unique)}')
 
     #sys.exit()
 
-    with open(pkl_path, 'rb') as f:
+    with open(args.pickle_path, 'rb') as f:
         pkl = pickle.load(f)
 
         for i, spn in enumerate(pkl.spns):
             mspn = spn.mspn
-            plot_distributions(mspn)
+            hspn = convert_spn(mspn)
+            #sys.exit()
 
-            #print(spn_to_str_ref_graph(mspn, node_to_str=node_to_str))
-
+            print(spn_to_str_ref_graph(hspn, node_to_str=node_to_str))
+            attrs = ';'.join(s for s in scope_to_attributes(hspn.scope))
+            print(f'# {attrs}')
 
 
             #plot_spn2(spn.mspn, f'plot_{i}.pdf')
