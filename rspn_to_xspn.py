@@ -12,6 +12,9 @@ from schemas.tpc_h.schema import gen_tpc_h_schema
 
 import argparse
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 
 scope_to_attributes = lambda x: ''
 
@@ -61,9 +64,9 @@ def reshape_histogram(alphas, m):
         li = n / m * i
         hi = n / m * (i + 1)
 
-        complete_alphas = sum(alphas[math.ceil(li) : math.floor(hi) + 1])
+        complete_alphas = sum(alphas[math.ceil(li) : math.floor(hi)])
         front_alphas = (math.ceil(li) - li) * alphas[math.floor(li)]
-        
+
         if hi < n:
             back_alphas = (hi - math.floor(hi)) * alphas[math.floor(hi)]
         else:
@@ -72,6 +75,12 @@ def reshape_histogram(alphas, m):
         betas.append(complete_alphas + front_alphas + back_alphas)
 
     return betas
+
+
+class ReducedHistogram:
+    def __init__(self, old_densities, new_densities):
+        self.old_densities = old_densities
+        self.new_densities = new_densities
 
 
 class ConvertedSPN:
@@ -96,7 +105,7 @@ class ConvertedSPN:
             histogram.id = node.id
 
             if size > max_histogram_size:
-                self.reduced_histograms[node.id] = (size, histogram)
+                self.reduced_histograms[node.id] = ReducedHistogram(node.return_histogram(), histogram.densities)
 
             return histogram
         else:
@@ -106,6 +115,12 @@ class ConvertedSPN:
             return node
 
 
+class Domain:
+    def __init__(self, histogram):
+        self.histogram = histogram
+
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
@@ -113,6 +128,7 @@ if __name__ == '__main__':
     parser.add_argument('--pickle_path', default='', help='Pickle file path')
     parser.add_argument('--csv_path', default='', help='CSV file path')
     parser.add_argument('--max_histogram_size', default=256)
+    parser.add_argument('--plot', default=False)
 
     args = parser.parse_args()
 
@@ -138,4 +154,29 @@ if __name__ == '__main__':
             #attrs = ';'.join(s for s in scope_to_attributes(converted.new_spn.scope))
             #print(f'# {attrs}')
 
-            print(converted.reduced_histograms.keys())
+            if args.plot:
+                plt.figure()
+                n = len(converted.reduced_histograms)
+                m = math.ceil(math.sqrt(n))
+
+                for i, (var, reduced_histogram) in enumerate(converted.reduced_histograms.items()):
+                    old_size = len(reduced_histogram.old_densities)
+                    print(f'node {var} was reduced to {args.max_histogram_size} from old size {old_size}')
+
+                    plt.subplot(m, m, i + 1)
+
+                    # plot old
+                    old_probs = reduced_histogram.old_densities
+                    old_xs = list(range(len(old_probs)))
+                    plt.bar(x=old_xs, height=old_probs)
+
+                    # plot new
+                    new_probs = reduced_histogram.new_densities
+                    new_xs = list(range(len(new_probs)))
+                    plt.bar(x=new_xs, height=new_probs)
+
+                    print(f'old={sum(old_probs)} new={sum(new_probs)}')
+
+
+                plt.show()
+
