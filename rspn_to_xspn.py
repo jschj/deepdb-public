@@ -82,9 +82,9 @@ def reshape_histogram(alphas, m):
 
 
 class ReducedHistogram:
-    def __init__(self, old_densities, new_densities):
+    def __init__(self, old_densities, new_histogram):
         self.old_densities = old_densities
-        self.new_densities = new_densities
+        self.new_histogram = new_histogram
 
 
 class ConvertedSPN:
@@ -109,7 +109,7 @@ class ConvertedSPN:
             histogram.id = node.id
 
             if size > max_histogram_size:
-                self.reduced_histograms[node.id] = ReducedHistogram(node.return_histogram(), histogram.densities)
+                self.reduced_histograms[node.id] = ReducedHistogram(node.return_histogram(), histogram)
 
             return histogram
         else:
@@ -119,6 +119,7 @@ class ConvertedSPN:
             return node
 
 
+# NOTE: For XSPNs we might need to remap the domain to a reduced interval beginning at 0!
 class Domain:
     def __init__(self, column, integral):
         self.min = min(column)
@@ -131,6 +132,10 @@ class Domain:
         else:
             return random.random() * (self.max - self.min) + self.min
 
+    def sample_reduced(self, new_size):
+        s = (self.sample() - self.min) / new_size
+        return int(s) if self.integral else s
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -139,14 +144,16 @@ if __name__ == '__main__':
     parser.add_argument('--pickle_path', default='', help='Pickle file path')
     parser.add_argument('--csv_path', default='', help='CSV file path')
     parser.add_argument('--max_histogram_size', default=256, type=int)
-    parser.add_argument('--plot', default=False)
+    parser.add_argument('--plot', action='store_true')
+    parser.add_argument('--eval', action='store_true')
+    parser.add_argument('--reduce', action='store_true')
     parser.add_argument('--count_queries', default=0, type=int)
 
     args = parser.parse_args()
 
     if args.dataset == 'tpc-h':
         schema = gen_tpc_h_schema(args.csv_path)
-        # TODO: Move this to schema scheme loading!
+        # TODO: Move this to schema loading!
         attribute_types = {
             #'id': 'bigint',
             'orderkey': 'bigint',
@@ -181,9 +188,11 @@ if __name__ == '__main__':
             converted = ConvertedSPN(mspn, schema.tables[0], args.max_histogram_size)
             #sys.exit()
 
-            #print(spn_to_str_ref_graph(converted.new_spn, node_to_str=node_to_str))
-            #attrs = ';'.join(s for s in scope_to_attributes(converted.new_spn.scope))
-            #print(f'# {attrs}')
+            if args.reduce:
+                print(spn_to_str_ref_graph(converted.new_spn, node_to_str=node_to_str))
+                attrs = ';'.join(s for s in scope_to_attributes(converted.new_spn.scope))
+                print(f'# {attrs}')
+
 
             if args.count_queries > 0:
                 data: pd.DataFrame = read_table_csv(schema.tables[0], csv_seperator=';')
@@ -191,7 +200,7 @@ if __name__ == '__main__':
                                      for key in attribute_types.keys() }
                 attributes = schema.tables[0].attributes[1:]
 
-                for _ in range(100):
+                for _ in range(args.count_queries):
                     random.shuffle(attributes)
                     n = random.randint(1, 4)
                     attrs = attributes[0:n]
@@ -201,28 +210,35 @@ if __name__ == '__main__':
 
 
             if args.plot:
-                plt.figure()
+                #plt.figure()
                 n = len(converted.reduced_histograms)
                 m = math.ceil(math.sqrt(n))
 
-                for i, (var, reduced_histogram) in enumerate(converted.reduced_histograms.items()):
+                for i, (node_id, reduced_histogram) in enumerate(converted.reduced_histograms.items()):
                     old_size = len(reduced_histogram.old_densities)
-                    print(f'node {var} was reduced to {args.max_histogram_size} from old size {old_size}')
+                    scope = scope_to_attributes(reduced_histogram.new_histogram.scope)
+                    print(f'node {node_id} with scope {scope} was reduced to {args.max_histogram_size} from old size {old_size}')
 
-                    plt.subplot(m, m, i + 1)
+                    #plt.subplot(m, m, i + 1)
 
                     # plot old
                     old_probs = reduced_histogram.old_densities
                     old_xs = list(range(len(old_probs)))
-                    plt.bar(x=old_xs, height=old_probs)
+                    #plt.bar(x=old_xs, height=old_probs)
 
                     # plot new
-                    new_probs = reduced_histogram.new_densities
+                    new_probs = reduced_histogram.new_histogram.densities
                     new_xs = list(range(len(new_probs)))
-                    plt.bar(x=new_xs, height=new_probs)
+                    #plt.bar(x=new_xs, height=new_probs)
 
                     print(f'old={sum(old_probs)} new={sum(new_probs)}')
 
 
-                plt.show()
+                #plt.show()
 
+
+            if args.eval:
+                
+                
+                
+                pass
