@@ -1,5 +1,6 @@
 from pkl_to_spn import scope_to_attributes
 from ensemble_compilation.graph_representation import Table
+from data_preparation.prepare_single_tables import read_table_csv
 import pickle
 import math
 
@@ -11,9 +12,12 @@ from rspn.structure.leaves import IdentityNumericLeaf
 from schemas.tpc_h.schema import gen_tpc_h_schema
 
 import argparse
+import random
 
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
+import pandas as pd
 
 
 scope_to_attributes = lambda x: ''
@@ -116,9 +120,16 @@ class ConvertedSPN:
 
 
 class Domain:
-    def __init__(self, histogram):
-        self.histogram = histogram
+    def __init__(self, column, integral):
+        self.min = min(column)
+        self.max = max(column)
+        self.integral = integral
 
+    def sample(self):
+        if self.integral:
+            return random.randint(self.min, self.max)
+        else:
+            return random.random() * (self.max - self.min) + self.min
 
 
 if __name__ == '__main__':
@@ -127,13 +138,33 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='abc', help='Which dataset to be used')
     parser.add_argument('--pickle_path', default='', help='Pickle file path')
     parser.add_argument('--csv_path', default='', help='CSV file path')
-    parser.add_argument('--max_histogram_size', default=256)
+    parser.add_argument('--max_histogram_size', default=256, type=int)
     parser.add_argument('--plot', default=False)
+    parser.add_argument('--count_queries', default=0, type=int)
 
     args = parser.parse_args()
 
     if args.dataset == 'tpc-h':
         schema = gen_tpc_h_schema(args.csv_path)
+        # TODO: Move this to schema scheme loading!
+        attribute_types = {
+            #'id': 'bigint',
+            'orderkey': 'bigint',
+            'partkey': 'bigint',
+            'suppkey': 'bigint',
+            'linenumber': 'smallint',
+            'quantity': 'numeric(8, 3)',
+            'extendedprices': 'numeric(12, 3)',
+            'discount': 'numeric(8, 3)',
+            'tax': 'numeric(8, 3)',
+            'returnflag': 'smallint',
+            'linestatus': 'smallint',
+            'shipdate': 'bigint',
+            'commitdate': 'bigint',
+            'receiptdate': 'bigint',
+            'shipinstruct': 'smallint',
+            'shipmode': 'smallint'
+        }
     else:
         raise ValueError('Dataset unknown')
 
@@ -153,6 +184,21 @@ if __name__ == '__main__':
             #print(spn_to_str_ref_graph(converted.new_spn, node_to_str=node_to_str))
             #attrs = ';'.join(s for s in scope_to_attributes(converted.new_spn.scope))
             #print(f'# {attrs}')
+
+            if args.count_queries > 0:
+                data: pd.DataFrame = read_table_csv(schema.tables[0], csv_seperator=';')
+                attribute_ranges = { key: Domain(data[f'line_item_sanitized.{key}'], data.dtypes[f'line_item_sanitized.{key}'] == np.int64)
+                                     for key in attribute_types.keys() }
+                attributes = schema.tables[0].attributes[1:]
+
+                for _ in range(100):
+                    random.shuffle(attributes)
+                    n = random.randint(1, 4)
+                    attrs = attributes[0:n]
+                    op = random.choice(['<=', '>='])
+                    cond = ' AND '.join(f'{attr} {random.choice(["<=", ">="])} {attribute_ranges[attr].sample()}' for attr in attrs)
+                    print(f'SELECT COUNT(*) FROM line_item_sanitized WHERE {cond};')
+
 
             if args.plot:
                 plt.figure()
