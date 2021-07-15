@@ -10,6 +10,8 @@ from spn.structure.leaves.histogram.Histograms import Histogram
 from rspn.structure.base import Sum
 from rspn.structure.leaves import IdentityNumericLeaf
 from schemas.tpc_h.schema import gen_tpc_h_schema
+from evaluation.utils import parse_query
+from ensemble_compilation.graph_representation import QueryType
 
 import argparse
 import random
@@ -140,16 +142,26 @@ class Domain:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
+    # actions
+    parser.add_argument('--plot', action='store_true')
+    parser.add_argument('--eval', action='store_true')
+    parser.add_argument('--reduce', action='store_true')
+    parser.add_argument('--generate', action='store_true')
+
+    parser.add_argument('--count_queries', default=0, type=int)
     parser.add_argument('--dataset', default='abc', help='Which dataset to be used')
     parser.add_argument('--pickle_path', default='', help='Pickle file path')
     parser.add_argument('--csv_path', default='', help='CSV file path')
     parser.add_argument('--max_histogram_size', default=256, type=int)
-    parser.add_argument('--plot', action='store_true')
-    parser.add_argument('--eval', action='store_true')
-    parser.add_argument('--reduce', action='store_true')
-    parser.add_argument('--count_queries', default=0, type=int)
+
+    # eval
+    parser.add_argument('--sql_queries', default='', type=str, help='path to sql query file')
 
     args = parser.parse_args()
+
+    if sum(1 for p in [args.plot, args.eval, args.reduce, args.generate] if p) != 1:
+        print(f'Exactly one action [plot, eval, reduce, generate] must be selected!')
+        exit()
 
     if args.dataset == 'tpc-h':
         schema = gen_tpc_h_schema(args.csv_path)
@@ -193,8 +205,7 @@ if __name__ == '__main__':
                 attrs = ';'.join(s for s in scope_to_attributes(converted.new_spn.scope))
                 print(f'# {attrs}')
 
-
-            if args.count_queries > 0:
+            elif args.generate:
                 data: pd.DataFrame = read_table_csv(schema.tables[0], csv_seperator=';')
                 attribute_ranges = { key: Domain(data[f'line_item_sanitized.{key}'], data.dtypes[f'line_item_sanitized.{key}'] == np.int64)
                                      for key in attribute_types.keys() }
@@ -204,12 +215,11 @@ if __name__ == '__main__':
                     random.shuffle(attributes)
                     n = random.randint(1, 4)
                     attrs = attributes[0:n]
-                    op = random.choice(['<=', '>='])
-                    cond = ' AND '.join(f'{attr} {random.choice(["<=", ">="])} {attribute_ranges[attr].sample()}' for attr in attrs)
+                    op = random.choice(['<='])
+                    cond = ' AND '.join(f'{attr} {op} {attribute_ranges[attr].sample()}' for attr in attrs)
                     print(f'SELECT COUNT(*) FROM line_item_sanitized WHERE {cond};')
 
-
-            if args.plot:
+            elif args.plot:
                 #plt.figure()
                 n = len(converted.reduced_histograms)
                 m = math.ceil(math.sqrt(n))
@@ -233,12 +243,17 @@ if __name__ == '__main__':
 
                     print(f'old={sum(old_probs)} new={sum(new_probs)}')
 
-
                 #plt.show()
 
+            elif args.eval:
+                # parse count queries and input them to SPN
+                raise NotImplementedError()
 
-            if args.eval:
-                
-                
-                
-                pass
+                with open(args.sql_queries, 'r') as sql_queries:
+                    for line in sql_queries.readlines():
+                        query = parse_query(line.strip(), schema)
+                        assert query.query_type == QueryType.CARDINALITY
+
+                        # TODO: First try RSPN cardinality estimation
+                        # TODO: Next try to do cardinality estimation in SPFlow with normal bottom-up evaluation
+
