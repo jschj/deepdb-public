@@ -6,6 +6,7 @@ import math
 
 from spn.io.Text import spn_to_str_ref_graph
 from spn.structure.leaves.histogram.Histograms import Histogram
+import spn.structure as structure
 
 from rspn.structure.base import Sum
 from rspn.structure.leaves import IdentityNumericLeaf
@@ -20,6 +21,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
+
+from cardinality_custom import estimate_expectation
 
 
 scope_to_attributes = lambda x: ''
@@ -105,7 +108,7 @@ class ConvertedSPN:
                 breaks = list(range(max_histogram_size + 1))
             else:
                 breaks = list(range(size + 1))
-                densities = node.return_histogram(copy=True)
+                densities = node.prob_sum #node.return_histogram(copy=True)
 
             histogram = Histogram(breaks=breaks, densities=densities, bin_repr_points=points, scope=node.scope)
             histogram.id = node.id
@@ -114,6 +117,9 @@ class ConvertedSPN:
                 self.reduced_histograms[node.id] = ReducedHistogram(node.return_histogram(), histogram)
 
             return histogram
+        elif isinstance(node, Sum):
+            children = [self._convert_spn(child, table, max_histogram_size) for child in node.children]
+            return structure.Base.Sum(weights=node.weights, children=children)
         else:
             for i in range(len(node.children)):
                 node.children[i] = self._convert_spn(node.children[i], table, max_histogram_size)
@@ -247,7 +253,7 @@ if __name__ == '__main__':
 
             elif args.eval:
                 # parse count queries and input them to SPN
-                raise NotImplementedError()
+                # raise NotImplementedError()
 
                 with open(args.sql_queries, 'r') as sql_queries:
                     for line in sql_queries.readlines():
@@ -257,3 +263,8 @@ if __name__ == '__main__':
                         # TODO: First try RSPN cardinality estimation
                         # TODO: Next try to do cardinality estimation in SPFlow with normal bottom-up evaluation
 
+                        print(line)
+                        exp = estimate_expectation(mspn, schema, line)
+                        print(f'exp={exp}')
+
+                        exit()
