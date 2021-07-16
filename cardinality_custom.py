@@ -11,11 +11,12 @@ import math
 from spn.io.Text import spn_to_str_ref_graph
 from spn.structure.leaves.histogram.Histograms import Histogram
 from spn.structure.Base import Product, get_topological_order, Sum
-from spn.algorithms.Inference import log_likelihood
+from spn.algorithms.Inference import likelihood, log_likelihood
 from spn.structure.leaves.parametric.Parametric import Categorical
 
 #from rspn.structure.base import Sum
-from rspn.structure.leaves import IdentityNumericLeaf
+import rspn
+from rspn.structure.leaves import IdentityNumericLeaf, identity_likelihood_range
 from schemas.tpc_h.schema import gen_tpc_h_schema
 from evaluation.utils import parse_query
 from ensemble_compilation.graph_representation import QueryType
@@ -27,6 +28,28 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
+
+
+def expectation(spn, table, query_str, schema):
+    query: Query = parse_query(query_str, schema)
+    # assumes <= conditions only!
+    # Histograms are configured such that they return P(X <= val)
+    leq_conditions = [cond[1].split('<=') for cond in query.conditions]
+    scope = set(table.attributes.index(cond[0]) for cond in leq_conditions)
+    # TODO: must be array with None's except where there is evidence (NumericRange)
+    evidence = dict(zip(scope, [cond[1] for cond in leq_conditions]))
+
+    nlhs = {IdentityNumericLeaf: identity_likelihood_range}
+
+    prob = expectation_recursive(node=spn,
+                                 feature_scope=[],
+                                 inverted_features=[],
+                                 relevant_scope=scope,
+                                 evidence=evidence,
+                                 node_expectation=None,
+                                 node_likelihoods=nlhs)
+
+    return prob
 
 
 def nanproduct(product, factor):
@@ -55,7 +78,7 @@ def expectation_recursive(node, feature_scope, inverted_features, relevant_scope
                 product = nanproduct(product, factor)
         return product
 
-    elif isinstance(node, Sum):
+    elif isinstance(node, rspn.structure.base.Sum):
         if len(relevant_scope.intersection(node.scope)) == 0:
             return np.nan
 
@@ -91,13 +114,31 @@ def expectation_recursive(node, feature_scope, inverted_features, relevant_scope
         return node_likelihoods[type(node)](node, evidence).item()
 
 
+def custom_expectation_recursive(node, evidence):
+    if isinstance(node, Product):
+        return math.prod(custom_expectation_recursive(child, evidence) for child in node.children)
+    elif isinstance(node, Sum):
+        return math.prod(weight * custom_expectation_recursive(child, evidence) for weight, child in zip(node.weights, node.children)) / sum(node.weights)
+    elif isinstance(node, Histogram):
+        index = node.scope[0]
+
+        if np.isnan(evidence[0, index]):
+            return 1
+
+        i = int(evidence[0, index])
+
+        return node.densities[i] if i < len(node.densities) else 1
+    else:
+        raise Exception()
+
+
 def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str):
     query: Query = parse_query(query_str, schema)
     # assumes <= conditions only!
     # Histograms are configured such that they return P(X <= val)
     leq_conditions = [cond[1].split('<=') for cond in query.conditions]
 
-    print(leq_conditions)
+    #print(leq_conditions)
 
     # create data in SPFlow format ...
     table: Table = schema.tables[0]
@@ -106,8 +147,8 @@ def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str):
     indices = [table.attributes.index(cond[0]) for cond in leq_conditions]
     data[0, indices] = [cond[1] for cond in leq_conditions]
 
-    print(data)
+    lh = likelihood(new_spn, data)
+    #xh = custom_expectation_recursive(new_spn, data)
+    xh = expectation(old_spn, table, query_str, schema)
 
-    ll = log_likelihood(new_spn, data)
-
-    return np.exp(ll)
+    return xh

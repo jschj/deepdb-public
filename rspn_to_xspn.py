@@ -271,4 +271,4 @@ if __name__ == '__main__':
                         exp = estimate_expectation(converted.old_spn, converted.new_spn, schema, line)
                         print(f'exp={exp}')
 
-                        exit()
+                        #exit()
