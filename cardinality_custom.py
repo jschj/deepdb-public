@@ -10,11 +10,11 @@ import math
 
 from spn.io.Text import spn_to_str_ref_graph
 from spn.structure.leaves.histogram.Histograms import Histogram
-from spn.structure.Base import Product
-import spn.structure.Base as spn
+from spn.structure.Base import Product, get_topological_order, Sum
 from spn.algorithms.Inference import log_likelihood
+from spn.structure.leaves.parametric.Parametric import Categorical
 
-from rspn.structure.base import Sum
+#from rspn.structure.base import Sum
 from rspn.structure.leaves import IdentityNumericLeaf
 from schemas.tpc_h.schema import gen_tpc_h_schema
 from evaluation.utils import parse_query
@@ -91,7 +91,7 @@ def expectation_recursive(node, feature_scope, inverted_features, relevant_scope
         return node_likelihoods[type(node)](node, evidence).item()
 
 
-def estimate_expectation(spn, schema: SchemaGraph, query_str):
+def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str):
     query: Query = parse_query(query_str, schema)
     # assumes <= conditions only!
     # Histograms are configured such that they return P(X <= val)
@@ -108,6 +108,6 @@ def estimate_expectation(spn, schema: SchemaGraph, query_str):
 
     print(data)
 
-    ll = log_likelihood(spn, data)
+    ll = log_likelihood(new_spn, data)
 
     return np.exp(ll)

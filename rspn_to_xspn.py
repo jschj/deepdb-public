@@ -7,8 +7,10 @@ import math
 from spn.io.Text import spn_to_str_ref_graph
 from spn.structure.leaves.histogram.Histograms import Histogram
 import spn.structure as structure
+from spn.structure.Base import Product, Sum
 
-from rspn.structure.base import Sum
+#from rspn.structure.base import Sum
+import rspn.structure.base
 from rspn.structure.leaves import IdentityNumericLeaf
 from schemas.tpc_h.schema import gen_tpc_h_schema
 from evaluation.utils import parse_query
@@ -117,14 +119,16 @@ class ConvertedSPN:
                 self.reduced_histograms[node.id] = ReducedHistogram(node.return_histogram(), histogram)
 
             return histogram
-        elif isinstance(node, Sum):
+        elif isinstance(node, rspn.structure.base.Sum):
             children = [self._convert_spn(child, table, max_histogram_size) for child in node.children]
-            return structure.Base.Sum(weights=node.weights, children=children)
+            result = Sum(weights=node.weights, children=children)
+            return result
+        elif isinstance(node, Product):
+            children = [self._convert_spn(child, table, max_histogram_size) for child in node.children]
+            result = Product(children)
+            return result
         else:
-            for i in range(len(node.children)):
-                node.children[i] = self._convert_spn(node.children[i], table, max_histogram_size)
-
-            return node
+            raise Exception(f'Unsupported node type {type(node)}')
 
 
 # NOTE: For XSPNs we might need to remap the domain to a reduced interval beginning at 0!
@@ -264,7 +268,7 @@ if __name__ == '__main__':
                         # TODO: Next try to do cardinality estimation in SPFlow with normal bottom-up evaluation
 
                         print(line)
-                        exp = estimate_expectation(mspn, schema, line)
+                        exp = estimate_expectation(converted.old_spn, converted.new_spn, schema, line)
                         print(f'exp={exp}')
 
                         exit()
