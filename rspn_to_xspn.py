@@ -106,6 +106,7 @@ class ConvertedSPN:
             points = [] # TODO: What's this?
 
             if size > max_histogram_size:
+                raise Exception('unexpected histogram reshape')
                 densities = reshape_histogram(node.return_histogram(), max_histogram_size)
                 breaks = list(range(max_histogram_size + 1))
             else:
@@ -267,8 +268,8 @@ if __name__ == '__main__':
                         # TODO: First try RSPN cardinality estimation
                         # TODO: Next try to do cardinality estimation in SPFlow with normal bottom-up evaluation
 
-                        print(line)
+                        #print(line.strip())
                         exp = estimate_expectation(converted.old_spn, converted.new_spn, schema, line)
-                        print(f'exp={exp} n={exp * 6001215}')
+                        #print(f'exp={exp} n={exp * 6001215}')
 
                         #exit()

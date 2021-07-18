@@ -99,6 +99,7 @@ def expectation_recursive(node, feature_scope, inverted_features, relevant_scope
                                             node_expectation, node_likelihoods)
                       for child in node.children]
 
+        # children that are NaN are excluded
         relevant_children_idx = np.where(np.isnan(llchildren) == False)[0]
 
         if len(relevant_children_idx) == 0:
@@ -124,25 +125,88 @@ def expectation_recursive(node, feature_scope, inverted_features, relevant_scope
             else:
                 raise Exception('Node type unknown: ' + str(t_node))
 
+        # NOTE: This can be represented by a single value in a histogram!
         return node_likelihoods[type(node)](node, evidence).item()
 
 
-def custom_expectation_recursive(node, evidence):
+def custom_expectation_recursive(node, evidence, node_likelihoods):
     if isinstance(node, Product):
-        return math.prod(custom_expectation_recursive(child, evidence) for child in node.children)
+        return math.prod(custom_expectation_recursive(child, evidence, node_likelihoods) for child in node.children)
     elif isinstance(node, Sum):
-        return math.prod(weight * custom_expectation_recursive(child, evidence) for weight, child in zip(node.weights, node.children)) / sum(node.weights)
+        weight_sum = sum(node.weights)
+        #assert np.isclose(weight_sum, 1)
+
+        return sum(weight * custom_expectation_recursive(child, evidence, node_likelihoods)
+                   for weight, child in zip(node.weights, node.children)) / weight_sum
     elif isinstance(node, Histogram):
-        index = node.scope[0]
+        # convert evidence (in SPFlow format) into format for identity_likelihood_range():
+        # replace nan with None and every real number R with NumericRange(-inf, R)
 
-        if np.isnan(evidence[0, index]):
-            return 1
+        converted_evidence = np.array([[None] * evidence.shape[1]])
+        idx = np.argwhere(~np.isnan(evidence[0]))
 
-        i = int(evidence[0, index])
+        #for to in evidence[0, idx]:
+        #    print(to.item())
+        #exit()
 
-        return node.densities[i] if i < len(node.densities) else 1
+        converted_evidence[0, idx] = np.array([[NumericRange([[-np.inf, to.item()]]) for to in evidence[0, idx]]]).T
+
+        return node_likelihoods[type(node)](node, converted_evidence).item()
     else:
-        raise Exception()
+        raise Exception('unexpected node type')
+
+
+def _histogram_interval_probability(node, upper_bound):
+    """Returns the interval probability of [-inf, upper_bound]."""
+
+    #print(f'densities={node.densities}')
+    #print(f'breaks={node.breaks}')
+
+    unique_vals = list(range(len(node.densities)))
+
+    if upper_bound == np.inf:
+        higher_idx = len(unique_vals)
+    else:
+        higher_idx = np.searchsorted(unique_vals, upper_bound, side='right')
+
+    if higher_idx >= len(node.densities):
+        return 1
+
+    p = node.densities[higher_idx] - node.densities[0]
+    return p
+
+
+def _histogram_likelihood(node, evidence):
+    assert len(node.scope) == 1
+
+    probs = np.zeros((evidence.shape[0], 1), dtype=np.float64)
+    ranges = evidence[:, node.scope[0]]
+
+    #print(f'ranges={ranges}')
+
+    for i, rang in enumerate(ranges):
+        # range == None => sum out!
+        if rang is None:
+            probs[i] = 1
+            continue
+
+        # ignore some other edge cases...
+
+        assert len(rang.get_ranges()) == 1
+
+        interval = rang.get_ranges()[0]
+        assert np.isinf(interval[0])
+
+        probs[i] = _histogram_interval_probability(node, interval[1])
+
+        #for k, interval in enumerate(rang.get_ranges()):
+        #    inclusive = rang.inclusive_intervals[k]
+
+        #    probs[i] += _histogram_interval_probability(node, interval[0], interval[1], rang.null_value,
+        #                                                inclusive[0], inclusive[1])
+
+
+    return probs
 
 
 def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str):
@@ -160,8 +224,15 @@ def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str):
     indices = [table.attributes.index(cond[0]) for cond in leq_conditions]
     data[0, indices] = [cond[1] for cond in leq_conditions]
 
-    lh = likelihood(new_spn, data)
-    #xh = custom_expectation_recursive(new_spn, data)
-    xh = expectation(old_spn, table, query_str, schema)
+    nlhs = {
+        IdentityNumericLeaf: identity_likelihood_range,
+        Histogram: _histogram_likelihood
+    }
 
-    return xh
+    #lh = likelihood(new_spn, data)
+    custom_lh = custom_expectation_recursive(new_spn, data, node_likelihoods=nlhs)
+    true_lh = expectation(old_spn, table, query_str, schema)
+
+    print(f'custom={custom_lh} true={true_lh}')
+
+    return true_lh
