@@ -20,6 +20,7 @@ from rspn.structure.leaves import IdentityNumericLeaf, identity_likelihood_range
 from schemas.tpc_h.schema import gen_tpc_h_schema
 from evaluation.utils import parse_query
 from ensemble_compilation.graph_representation import QueryType
+from rspn.algorithms.ranges import NumericRange
 
 import argparse
 import random
@@ -30,14 +31,26 @@ import numpy as np
 import pandas as pd
 
 
-def expectation(spn, table, query_str, schema):
+def expectation(spn, table: Table, query_str, schema):
     query: Query = parse_query(query_str, schema)
     # assumes <= conditions only!
     # Histograms are configured such that they return P(X <= val)
     leq_conditions = [cond[1].split('<=') for cond in query.conditions]
     scope = set(table.attributes.index(cond[0]) for cond in leq_conditions)
     # TODO: must be array with None's except where there is evidence (NumericRange)
-    evidence = dict(zip(scope, [cond[1] for cond in leq_conditions]))
+    
+    arr = [[None] * len(table.attributes)]
+    evidence = np.array(arr)
+
+    indices = [table.attributes.index(cond[0]) for cond in leq_conditions]
+
+    for i, to in zip(indices, [float(cond[1]) for cond in leq_conditions]):
+        evidence[0, i] = NumericRange(ranges=[[-np.inf, to]])
+
+    #print(f'evidence={evidence}')
+    #exit()
+
+    #evidence = dict(zip(scope, [cond[1] for cond in leq_conditions]))
 
     nlhs = {IdentityNumericLeaf: identity_likelihood_range}
 

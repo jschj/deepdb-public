@@ -269,6 +269,6 @@ if __name__ == '__main__':
 
                         print(line)
                         exp = estimate_expectation(converted.old_spn, converted.new_spn, schema, line)
-                        print(f'exp={exp}')
+                        print(f'exp={exp} n={exp * 6001215}')
 
                         #exit()
