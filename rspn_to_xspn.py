@@ -95,12 +95,12 @@ class ReducedHistogram:
 
 
 class ConvertedSPN:
-    def __init__(self, spn, table, max_histogram_size) -> None:
+    def __init__(self, spn, table, max_histogram_size, converted_domains) -> None:
         self.old_spn = spn
         self.reduced_histograms = dict()
-        self.new_spn = self._convert_spn(spn, table, max_histogram_size)
+        self.new_spn = self._convert_spn(spn, table, max_histogram_size, converted_domains)
 
-    def _convert_spn(self, node, table: Table, max_histogram_size):
+    def _convert_spn(self, node, table: Table, max_histogram_size, converted_domains):
         if isinstance(node, IdentityNumericLeaf):
             size = len(node.unique_vals)
             points = [] # TODO: What's this?
@@ -110,8 +110,19 @@ class ConvertedSPN:
                 densities = reshape_histogram(node.return_histogram(), max_histogram_size)
                 breaks = list(range(max_histogram_size + 1))
             else:
-                breaks = list(range(size + 1))
+                # TODO: Get the domain for this scope. Then remap the values in unique_values with the help
+                # of DomainConverion.convert(...). Those are our breaks. densitites needs to be prepended
+                # with 0s and appended with 1s.
+                breaks = [converted_domains[node.scope[0]].convert(uni) for uni in node.unique_vals]
+                #breaks.append(max(breaks) + 1)
                 densities = node.prob_sum #node.return_histogram(copy=True)
+
+            if node.id == 232 or node.id == 20:
+                print(f'node {node.id} with scope {node.scope}:')
+                print(f'unique_vals={node.unique_vals}')
+                print(f'breaks={breaks}')
+                print(f'probs={densities}')
+                print()
 
             histogram = Histogram(breaks=breaks, densities=densities, bin_repr_points=points, scope=node.scope)
             histogram.id = node.id
@@ -121,11 +132,11 @@ class ConvertedSPN:
 
             return histogram
         elif isinstance(node, rspn.structure.base.Sum):
-            children = [self._convert_spn(child, table, max_histogram_size) for child in node.children]
+            children = [self._convert_spn(child, table, max_histogram_size, converted_domains) for child in node.children]
             result = Sum(weights=node.weights, children=children)
             return result
         elif isinstance(node, Product):
-            children = [self._convert_spn(child, table, max_histogram_size) for child in node.children]
+            children = [self._convert_spn(child, table, max_histogram_size, converted_domains) for child in node.children]
             result = Product(children)
             return result
         else:
@@ -148,6 +159,64 @@ class Domain:
     def sample_reduced(self, new_size):
         s = (self.sample() - self.min) / new_size
         return int(s) if self.integral else s
+
+
+class DomainConversion:
+    def __init__(self, min_value, max_value, offset, stretch_factor, is_intergral):
+        self.min_value = min_value
+        self.max_value = max_value
+        self.offset = offset
+        self.stretch_factor = stretch_factor
+        self.is_integral = is_intergral
+
+    def convert(self, value):
+        if self.is_integral:
+            return math.floor((value - self.offset) / self.stretch_factor)
+        else:
+            return math.floor((value - self.offset) / self.stretch_factor)
+
+    def unconvert(self, value):
+        if self.is_integral:
+            return math.floor(value * self.stretch_factor) + self.offset
+        else:
+            return value * self.stretch_factor + self.offset
+
+    def __str__(self):
+        if self.is_integral:
+            upper = math.floor((self.max_value - self.offset) / self.stretch_factor)
+            return f'[{self.min_value}, {self.max_value}] (integral) -> [0, {upper}] (integral)'
+        else:
+            upper = math.floor((self.max_value - self.offset) / self.stretch_factor)
+            return f'[{self.min_value}, {self.max_value}] (real) -> [0, {upper}] (integral)'
+
+
+def remap_domain(column, max_size, is_integral) -> DomainConversion:
+    min_value = min(column)
+    max_value = max(column)
+    offset = min_value
+    # > 1 if the domain is reduced in size
+    if is_integral:
+        stretch_factor = max((max_value - min_value) / max_size, 1)
+    else:
+        stretch_factor = (max_value - min_value) / max_size
+
+    return DomainConversion(min_value, max_value, offset, stretch_factor, is_integral)
+
+
+def remap_data(data: pd.DataFrame, attribute_types: dict):
+    domains = { key: remap_domain(data[f'line_item_sanitized.{key}'], 256,
+                                  data.dtypes[f'line_item_sanitized.{key}'] == np.int64)
+                for key in attribute_types.keys() }
+
+    df = data.copy(deep=True)
+
+    print(df)
+
+    for attr_name in domains.keys():
+        col_name = f'line_item_sanitized.{attr_name}'
+        df[col_name] = df[col_name].map(domains[attr_name].convert)
+
+    return df
 
 
 if __name__ == '__main__':
@@ -207,9 +276,25 @@ if __name__ == '__main__':
         for i, spn in enumerate(pkl.spns):
             scope_to_attributes = lambda scope: [schema.tables[0].attributes[s] for s in scope]
 
+            if True:
+                data: pd.DataFrame = read_table_csv(schema.tables[0], csv_seperator=';')
+                attribute_ranges = { key: remap_domain(data[f'line_item_sanitized.{key}'], args.max_histogram_size, data.dtypes[f'line_item_sanitized.{key}'] == np.int64)
+                                        for key in attribute_types.keys() }
+                attributes = schema.tables[0].attributes[0:]
+                converted_domains = dict()
+
+                for i, attr_name in enumerate(attributes):
+                    attr_range = attribute_ranges[attr_name]
+                    print(f'{i} {attr_name} {attr_range}')
+                    converted_domains[i] = attr_range
+
+                #df = remap_data(data, attribute_types)
+                #print(df)
+
+            print(f'converted_domains={converted_domains}')
+
             mspn = spn.mspn
-            converted = ConvertedSPN(mspn, schema.tables[0], args.max_histogram_size)
-            #sys.exit()
+            converted = ConvertedSPN(mspn, schema.tables[0], args.max_histogram_size, converted_domains=converted_domains)
 
             if args.reduce:
                 print(spn_to_str_ref_graph(converted.new_spn, node_to_str=node_to_str))
@@ -269,7 +354,7 @@ if __name__ == '__main__':
                         # TODO: Next try to do cardinality estimation in SPFlow with normal bottom-up evaluation
 
                         #print(line.strip())
-                        exp = estimate_expectation(converted.old_spn, converted.new_spn, schema, line)
+                        exp = estimate_expectation(converted.old_spn, converted.new_spn, schema, line, converted_domains)
                         #print(f'exp={exp} n={exp * 6001215}')
 
                         #exit()

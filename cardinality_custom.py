@@ -126,7 +126,9 @@ def expectation_recursive(node, feature_scope, inverted_features, relevant_scope
                 raise Exception('Node type unknown: ' + str(t_node))
 
         # NOTE: This can be represented by a single value in a histogram!
-        return node_likelihoods[type(node)](node, evidence).item()
+        leaf_lh = node_likelihoods[type(node)](node, evidence).item()
+        #print(f'    true lh of {node.id} with scope {node.scope} = {leaf_lh}')
+        return leaf_lh
 
 
 def custom_expectation_recursive(node, evidence, node_likelihoods):
@@ -151,23 +153,37 @@ def custom_expectation_recursive(node, evidence, node_likelihoods):
 
         converted_evidence[0, idx] = np.array([[NumericRange([[-np.inf, to.item()]]) for to in evidence[0, idx]]]).T
 
-        return node_likelihoods[type(node)](node, converted_evidence).item()
+        leaf_lh = node_likelihoods[type(node)](node, converted_evidence).item()
+
+        #if node.id == 232 or node.id == 20:
+        #    print(f'breaks={node.breaks} densities={node.densities}')
+
+        #if not np.isclose(leaf_lh, 1) or node.id == 232:
+        #    print(f'    custom lh of {node.id} with scope {node.scope} = {leaf_lh}')
+        return leaf_lh
     else:
         raise Exception('unexpected node type')
 
 
+# TODO: WHAT THE FUCK IS WRONG WITH YOU
 def _histogram_interval_probability(node, upper_bound):
     """Returns the interval probability of [-inf, upper_bound]."""
 
     #print(f'densities={node.densities}')
     #print(f'breaks={node.breaks}')
 
-    unique_vals = list(range(len(node.densities)))
+    unique_vals = node.breaks
 
     if upper_bound == np.inf:
         higher_idx = len(unique_vals)
     else:
         higher_idx = np.searchsorted(unique_vals, upper_bound, side='right')
+
+    #if upper_bound <= 0:
+    #    return 0
+
+    #if node.id == 232 or node.id == 20:
+    #    print(f'upper={upper_bound} higher_idx={higher_idx} unique={unique_vals} dens={node.densities}')
 
     if higher_idx >= len(node.densities):
         return 1
@@ -209,7 +225,7 @@ def _histogram_likelihood(node, evidence):
     return probs
 
 
-def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str):
+def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str, converted_domains):
     query: Query = parse_query(query_str, schema)
     # assumes <= conditions only!
     # Histograms are configured such that they return P(X <= val)
@@ -222,7 +238,8 @@ def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str):
     data = np.empty((1, len(table.attributes)))
     data[:] = np.nan
     indices = [table.attributes.index(cond[0]) for cond in leq_conditions]
-    data[0, indices] = [cond[1] for cond in leq_conditions]
+    data[0, indices] = [converted_domains[var_index].convert(float(cond[1]))
+                        for cond, var_index in zip(leq_conditions, indices)]
 
     nlhs = {
         IdentityNumericLeaf: identity_likelihood_range,
