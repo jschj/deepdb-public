@@ -1,0 +1,1 @@
+python3 rspn_to_xspn.py --dataset tpc-h --pickle_path ../tpc-h/spn_ensembles/ensemble_single_tpc-h_10000000.pkl --csv_path ../tpc-h/line_item_sanitized.csv --sql_queries ../tpc-h/queries/count_queries_leq.sql --max_histogram_size 10000 --eval
