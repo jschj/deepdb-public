@@ -7,11 +7,13 @@ from ensemble_compilation.graph_representation import Query, SchemaGraph, Table
 from data_preparation.prepare_single_tables import read_table_csv
 import pickle
 import math
+import itertools
 
 from spn.io.Text import spn_to_str_ref_graph
 from spn.structure.leaves.histogram.Histograms import Histogram
+from spn.structure.leaves.histogram.Inference import histogram_log_likelihood
 from spn.structure.Base import Product, get_topological_order, Sum
-from spn.algorithms.Inference import likelihood, log_likelihood
+from spn.algorithms.Inference import likelihood, log_likelihood, add_node_likelihood
 from spn.structure.leaves.parametric.Parametric import Categorical
 
 #from rspn.structure.base import Sum
@@ -29,6 +31,10 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
+
+
+true_leaf_lhs = dict()
+custom_leaf_lhs = dict()
 
 
 def expectation(spn, table: Table, query_str, schema):
@@ -81,23 +87,28 @@ def nanproduct(product, factor):
 def expectation_recursive(node, feature_scope, inverted_features, relevant_scope, evidence, node_expectation,
                           node_likelihoods):
     if isinstance(node, Product):
-
+        merged_dicts = dict()
         product = np.nan
         for child in node.children:
             if len(relevant_scope.intersection(child.scope)) > 0:
-                factor = expectation_recursive(child, feature_scope, inverted_features, relevant_scope, evidence,
-                                               node_expectation, node_likelihoods)
+                leaf_values, factor = expectation_recursive(child, feature_scope, inverted_features, relevant_scope, evidence,
+                                                            node_expectation, node_likelihoods)
                 # NaN is treated as 1 (like summing out), NaN is returned if product = factor = NaN
                 product = nanproduct(product, factor)
-        return product
+                merged_dicts = dict(itertools.chain(merged_dicts.items(), leaf_values.items()))
+        return merged_dicts, product
 
     elif isinstance(node, rspn.structure.base.Sum):
         if len(relevant_scope.intersection(node.scope)) == 0:
             return np.nan
 
-        llchildren = [expectation_recursive(child, feature_scope, inverted_features, relevant_scope, evidence,
+        child_values = [expectation_recursive(child, feature_scope, inverted_features, relevant_scope, evidence,
                                             node_expectation, node_likelihoods)
-                      for child in node.children]
+                        for child in node.children]
+        list_of_leaf_values, llchildren = zip(*child_values)
+        merged_dicts = dict(itertools.chain(*[l.items() for l in list_of_leaf_values]))
+
+        #print(merged_dicts)
 
         # children that are NaN are excluded
         relevant_children_idx = np.where(np.isnan(llchildren) == False)[0]
@@ -109,7 +120,7 @@ def expectation_recursive(node, feature_scope, inverted_features, relevant_scope
         weights_normalizer = sum(node.weights[j] for j in relevant_children_idx)
         weighted_sum = sum(node.weights[j] * llchildren[j] for j in relevant_children_idx)
 
-        return weighted_sum / weights_normalizer
+        return merged_dicts, weighted_sum / weights_normalizer
 
     else:
         # seems always false in our example
@@ -127,19 +138,28 @@ def expectation_recursive(node, feature_scope, inverted_features, relevant_scope
 
         # NOTE: This can be represented by a single value in a histogram!
         leaf_lh = node_likelihoods[type(node)](node, evidence).item()
+        #true_leaf_lhs[node.id] = leaf_lh
         #print(f'    true lh of {node.id} with scope {node.scope} = {leaf_lh}')
-        return leaf_lh
+        return {node.id: leaf_lh}, leaf_lh
 
 
 def custom_expectation_recursive(node, evidence, node_likelihoods):
     if isinstance(node, Product):
-        return math.prod(custom_expectation_recursive(child, evidence, node_likelihoods) for child in node.children)
+        child_values = [custom_expectation_recursive(child, evidence, node_likelihoods)
+                        for child in node.children]
+        #print(*[list(v[0].items()) for v in child_values])
+        merged_dicts = dict(itertools.chain(*[list(v[0].items()) for v in child_values]))
+
+        return merged_dicts, math.prod(v[1] for v in child_values)
     elif isinstance(node, Sum):
         weight_sum = sum(node.weights)
         #assert np.isclose(weight_sum, 1)
+        child_values = [custom_expectation_recursive(child, evidence, node_likelihoods)
+                        for child in node.children]
+        #print(*[list(v[0].items()) for v in child_values])
+        merged_dicts = dict(itertools.chain(*[list(v[0].items()) for v in child_values]))
 
-        return sum(weight * custom_expectation_recursive(child, evidence, node_likelihoods)
-                   for weight, child in zip(node.weights, node.children)) / weight_sum
+        return merged_dicts, sum(weight * child for weight, child in zip(node.weights, [v[1] for v in child_values])) / weight_sum
     elif isinstance(node, Histogram):
         # convert evidence (in SPFlow format) into format for identity_likelihood_range():
         # replace nan with None and every real number R with NumericRange(-inf, R)
@@ -154,13 +174,14 @@ def custom_expectation_recursive(node, evidence, node_likelihoods):
         converted_evidence[0, idx] = np.array([[NumericRange([[-np.inf, to.item()]]) for to in evidence[0, idx]]]).T
 
         leaf_lh = node_likelihoods[type(node)](node, converted_evidence).item()
+        #custom_leaf_lhs[node.id] = leaf_lh
 
         #if node.id == 232 or node.id == 20:
         #    print(f'breaks={node.breaks} densities={node.densities}')
 
         #if not np.isclose(leaf_lh, 1) or node.id == 232:
-        #    print(f'    custom lh of {node.id} with scope {node.scope} = {leaf_lh}')
-        return leaf_lh
+        #print(f'    custom lh of {node.id} with scope {node.scope} = {leaf_lh}')
+        return {node.id: leaf_lh}, leaf_lh
     else:
         raise Exception('unexpected node type')
 
@@ -182,23 +203,30 @@ def _histogram_interval_probability(node, upper_bound):
     #if upper_bound <= 0:
     #    return 0
 
-    #if node.id == 232 or node.id == 20:
+    #if node.id == 4:
     #    print(f'upper={upper_bound} higher_idx={higher_idx} unique={unique_vals} dens={node.densities}')
 
     if higher_idx >= len(node.densities):
         return 1
 
-    p = node.densities[higher_idx] - node.densities[0]
-    return p
+    return node.densities[higher_idx]
 
 
 def _histogram_likelihood(node, evidence):
     assert len(node.scope) == 1
 
+    # convert data in SPFlow format
+    data = np.array([[(np.nan if interval is None else interval.ranges[0][1]) for interval in evidence[0]]])
+    ll = histogram_log_likelihood(node, data)
+    lh = np.exp(ll)
+
     probs = np.zeros((evidence.shape[0], 1), dtype=np.float64)
     ranges = evidence[:, node.scope[0]]
 
     #print(f'ranges={ranges}')
+
+    #if node.id == 4:
+    #    print(f'probing node {node.id} with scope {node.scope} and evidence {evidence}')
 
     for i, rang in enumerate(ranges):
         # range == None => sum out!
@@ -221,6 +249,7 @@ def _histogram_likelihood(node, evidence):
         #    probs[i] += _histogram_interval_probability(node, interval[0], interval[1], rang.null_value,
         #                                                inclusive[0], inclusive[1])
 
+    print(f'probs={probs} lh={lh}')
 
     return probs
 
@@ -246,10 +275,30 @@ def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str, conve
         Histogram: _histogram_likelihood
     }
 
-    #lh = likelihood(new_spn, data)
-    custom_lh = custom_expectation_recursive(new_spn, data, node_likelihoods=nlhs)
-    true_lh = expectation(old_spn, table, query_str, schema)
+    true_leaf_lhs = dict()
+    custom_leaf_lhs = dict()
 
-    print(f'custom={custom_lh} true={true_lh}')
+    print('--------------------------------------------------')
+
+    #lh = likelihood(new_spn, data)
+    custom_merged, custom_lh = custom_expectation_recursive(new_spn, data, node_likelihoods=nlhs)
+    true_merged, true_lh = expectation(old_spn, table, query_str, schema)
+    spflow_lh = likelihood(new_spn, data).item()
+
+    error = abs(custom_lh - true_lh)
+    #print(f'query={query_str.strip()}')
+    print(f'custom={custom_lh} true={true_lh} spflow={spflow_lh} error={error}')
+    exit()
+
+    #print(f'custom_merged={custom_merged}')
+    #print(f'true_merged={true_merged}')
+
+    if error != 0:
+        common_keys = set(custom_merged.keys()).intersection(set(true_merged.keys()))
+        digest = {k: (custom_merged[k], true_merged[k]) for k in common_keys}
+
+        for k, v in digest.items():
+            pass #print(f'{k}: {v[0]} <-> {v[1]}')
+
 
     return true_lh
