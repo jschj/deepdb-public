@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from cardinality_custom import estimate_expectation
+from summed_histogram import SummedHistogram, get_histogram_to_str, add_summed_histogram_inference_support
 
 
 scope_to_attributes = lambda x: ''
@@ -115,7 +116,9 @@ class ConvertedSPN:
                 # with 0s and appended with 1s.
                 breaks = [converted_domains[node.scope[0]].convert(uni) for uni in node.unique_vals]
                 #breaks.append(max(breaks) + 1)
-                densities = node.prob_sum #node.return_histogram(copy=True)
+                densities = np.copy(node.prob_sum) #node.return_histogram(copy=True)
+                # clip any numerical errors away
+                densities[-1] = 1
 
             if node.id == 232 or node.id == 20:
                 print(f'node {node.id} with scope {node.scope}:')
@@ -124,7 +127,8 @@ class ConvertedSPN:
                 print(f'probs={densities}')
                 print()
 
-            histogram = Histogram(breaks=breaks, densities=densities, bin_repr_points=points, scope=node.scope)
+            #histogram = Histogram(breaks=breaks, densities=densities, bin_repr_points=points, scope=node.scope)
+            histogram = SummedHistogram(breaks=breaks, densities=densities, scope=node.scope)
             histogram.id = node.id
 
             if size > max_histogram_size:
@@ -275,6 +279,7 @@ if __name__ == '__main__':
 
         for i, spn in enumerate(pkl.spns):
             scope_to_attributes = lambda scope: [schema.tables[0].attributes[s] for s in scope]
+            node_to_str[SummedHistogram] = get_histogram_to_str(scope_to_attributes)
 
             if True:
                 data: pd.DataFrame = read_table_csv(schema.tables[0], csv_seperator=';')
@@ -344,6 +349,9 @@ if __name__ == '__main__':
             elif args.eval:
                 # parse count queries and input them to SPN
                 # raise NotImplementedError()
+
+                print('INFO: adding summed histogram support')
+                add_summed_histogram_inference_support()
 
                 with open(args.sql_queries, 'r') as sql_queries:
                     for line in sql_queries.readlines():

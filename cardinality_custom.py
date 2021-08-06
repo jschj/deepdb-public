@@ -8,6 +8,8 @@ from data_preparation.prepare_single_tables import read_table_csv
 import pickle
 import math
 import itertools
+import copy
+import bisect
 
 from spn.io.Text import spn_to_str_ref_graph
 from spn.structure.leaves.histogram.Histograms import Histogram
@@ -31,6 +33,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
+
+from summed_histogram import SummedHistogram, add_summed_histogram_inference_support
 
 
 true_leaf_lhs = dict()
@@ -160,7 +164,7 @@ def custom_expectation_recursive(node, evidence, node_likelihoods):
         merged_dicts = dict(itertools.chain(*[list(v[0].items()) for v in child_values]))
 
         return merged_dicts, sum(weight * child for weight, child in zip(node.weights, [v[1] for v in child_values])) / weight_sum
-    elif isinstance(node, Histogram):
+    elif isinstance(node, Histogram) or isinstance(node, SummedHistogram):
         # convert evidence (in SPFlow format) into format for identity_likelihood_range():
         # replace nan with None and every real number R with NumericRange(-inf, R)
 
@@ -187,7 +191,7 @@ def custom_expectation_recursive(node, evidence, node_likelihoods):
 
 
 # TODO: WHAT THE FUCK IS WRONG WITH YOU
-def _histogram_interval_probability(node, upper_bound):
+def _histogram_interval_probability(node, upper_bound, print_index=False):
     """Returns the interval probability of [-inf, upper_bound]."""
 
     #print(f'densities={node.densities}')
@@ -209,16 +213,14 @@ def _histogram_interval_probability(node, upper_bound):
     if higher_idx >= len(node.densities):
         return 1
 
+    #if print_index:
+    #    print(f'custom index={higher_idx}')
+
     return node.densities[higher_idx]
 
 
 def _histogram_likelihood(node, evidence):
     assert len(node.scope) == 1
-
-    # convert data in SPFlow format
-    data = np.array([[(np.nan if interval is None else interval.ranges[0][1]) for interval in evidence[0]]])
-    ll = histogram_log_likelihood(node, data)
-    lh = np.exp(ll)
 
     probs = np.zeros((evidence.shape[0], 1), dtype=np.float64)
     ranges = evidence[:, node.scope[0]]
@@ -249,7 +251,33 @@ def _histogram_likelihood(node, evidence):
         #    probs[i] += _histogram_interval_probability(node, interval[0], interval[1], rang.null_value,
         #                                                inclusive[0], inclusive[1])
 
-    print(f'probs={probs} lh={lh}')
+    # check what SPFlow would calculate
+
+    # convert data in SPFlow format
+    data = np.array([[(np.nan if interval is None else interval.ranges[0][1]) for interval in evidence[0]]])
+    # SPFlows likelihood
+    if not np.isnan(data[0][node.scope[0]]):
+        val = data[0][node.scope[0]]
+        idx = bisect.bisect(node.breaks, val)
+        out_of_bounds = val < node.breaks[0] or val >= node.breaks[-1]
+    else:
+        idx = -1
+        out_of_bounds = True
+
+    ll = histogram_log_likelihood(node, data)
+    lh = np.exp(ll)
+
+    error = np.abs(probs - lh)
+
+    # if error is too large repeat calculation and compare indices
+    if error > 1e-3:
+        custom_spflow_prob = node.densities[idx - 1]
+        #print(f'custom lh={probs} spflow lh={lh} custom spflow prob={custom_spflow_prob} idx={idx} oob={out_of_bounds} error={np.abs(probs - lh)} density_len={len(node.densities)} densities={node.densities} breaks={node.breaks}')
+        #print(f'SPFlow index={idx}')
+        _histogram_interval_probability(node, interval[1], True)
+
+        #if not out_of_bounds:
+        #    raise Exception("not out_of_bounds detected!")
 
     return probs
 
@@ -272,7 +300,8 @@ def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str, conve
 
     nlhs = {
         IdentityNumericLeaf: identity_likelihood_range,
-        Histogram: _histogram_likelihood
+        Histogram: _histogram_likelihood,
+        SummedHistogram: _histogram_likelihood
     }
 
     true_leaf_lhs = dict()
@@ -288,17 +317,17 @@ def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str, conve
     error = abs(custom_lh - true_lh)
     #print(f'query={query_str.strip()}')
     print(f'custom={custom_lh} true={true_lh} spflow={spflow_lh} error={error}')
-    exit()
+    #exit()
 
     #print(f'custom_merged={custom_merged}')
     #print(f'true_merged={true_merged}')
 
-    if error != 0:
-        common_keys = set(custom_merged.keys()).intersection(set(true_merged.keys()))
-        digest = {k: (custom_merged[k], true_merged[k]) for k in common_keys}
+    #if error != 0:
+    #    common_keys = set(custom_merged.keys()).intersection(set(true_merged.keys()))
+    #    digest = {k: (custom_merged[k], true_merged[k]) for k in common_keys}
 
-        for k, v in digest.items():
-            pass #print(f'{k}: {v[0]} <-> {v[1]}')
+    #    for k, v in digest.items():
+    #        pass #print(f'{k}: {v[0]} <-> {v[1]}')
 
 
     return true_lh
