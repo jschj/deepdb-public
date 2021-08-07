@@ -34,7 +34,7 @@ import seaborn as sns
 import numpy as np
 import pandas as pd
 
-from summed_histogram import SummedHistogram, add_summed_histogram_inference_support
+from summed_histogram import SummedHistogram, _summed_histogram_lh, add_summed_histogram_inference_support, _summed_histogram_llh
 
 
 true_leaf_lhs = dict()
@@ -213,8 +213,8 @@ def _histogram_interval_probability(node, upper_bound, print_index=False):
     if higher_idx >= len(node.densities):
         return 1
 
-    #if print_index:
-    #    print(f'custom index={higher_idx}')
+    if print_index:
+        print(f'custom index={higher_idx}')
 
     return node.densities[higher_idx]
 
@@ -255,29 +255,22 @@ def _histogram_likelihood(node, evidence):
 
     # convert data in SPFlow format
     data = np.array([[(np.nan if interval is None else interval.ranges[0][1]) for interval in evidence[0]]])
-    # SPFlows likelihood
-    if not np.isnan(data[0][node.scope[0]]):
-        val = data[0][node.scope[0]]
-        idx = bisect.bisect(node.breaks, val)
-        out_of_bounds = val < node.breaks[0] or val >= node.breaks[-1]
-    else:
-        idx = -1
-        out_of_bounds = True
 
-    ll = histogram_log_likelihood(node, data)
+    ll = _summed_histogram_llh(node, data)
+    #ll = histogram_log_likelihood(node, data)
     lh = np.exp(ll)
 
     error = np.abs(probs - lh)
 
     # if error is too large repeat calculation and compare indices
     if error > 1e-3:
-        custom_spflow_prob = node.densities[idx - 1]
-        #print(f'custom lh={probs} spflow lh={lh} custom spflow prob={custom_spflow_prob} idx={idx} oob={out_of_bounds} error={np.abs(probs - lh)} density_len={len(node.densities)} densities={node.densities} breaks={node.breaks}')
+        print(f'custom lh={probs} spflow lh={lh}')
+
+
         #print(f'SPFlow index={idx}')
         _histogram_interval_probability(node, interval[1], True)
+        _summed_histogram_llh(node, data, verbose=True)
 
-        #if not out_of_bounds:
-        #    raise Exception("not out_of_bounds detected!")
 
     return probs
 
@@ -307,27 +300,18 @@ def estimate_expectation(old_spn, new_spn, schema: SchemaGraph, query_str, conve
     true_leaf_lhs = dict()
     custom_leaf_lhs = dict()
 
-    print('--------------------------------------------------')
-
-    #lh = likelihood(new_spn, data)
+    # the expectation as computed by a custom rebuild of DeepDB for our kind of histograms
     custom_merged, custom_lh = custom_expectation_recursive(new_spn, data, node_likelihoods=nlhs)
+    # the expectation as computed by DeepDB (truth)
     true_merged, true_lh = expectation(old_spn, table, query_str, schema)
+    # the expectation as computed by SPFlow
     spflow_lh = likelihood(new_spn, data).item()
 
-    error = abs(custom_lh - true_lh)
-    #print(f'query={query_str.strip()}')
-    print(f'custom={custom_lh} true={true_lh} spflow={spflow_lh} error={error}')
-    #exit()
+    custom_error = abs(custom_lh - true_lh)
+    spflow_error = abs(spflow_lh - true_lh)
 
-    #print(f'custom_merged={custom_merged}')
-    #print(f'true_merged={true_merged}')
+    print(f'custom_error={custom_error} spflow_error={spflow_error} | true={true_lh} custom={custom_lh} spflow={spflow_lh}')
 
-    #if error != 0:
-    #    common_keys = set(custom_merged.keys()).intersection(set(true_merged.keys()))
-    #    digest = {k: (custom_merged[k], true_merged[k]) for k in common_keys}
-
-    #    for k, v in digest.items():
-    #        pass #print(f'{k}: {v[0]} <-> {v[1]}')
-
+    assert (custom_error <= 1e-3 and spflow_error <= 1e-3), f'ERROR EXCEED LIMIT!'
 
     return true_lh

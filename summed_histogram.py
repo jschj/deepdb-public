@@ -44,7 +44,7 @@ def get_histogram_to_str(scope_to_attributes):
 
 # inference algorithms
 
-def _summed_histogram_lh(breaks, densities, data):
+def _summed_histogram_lh(breaks, densities, data, **kwargs):
     probs = np.zeros((data.shape[0], 1))
 
     for i, x in enumerate(data):
@@ -57,7 +57,14 @@ def _summed_histogram_lh(breaks, densities, data):
             probs[i] = 1
             continue
 
-        probs[i] = densities[bisect.bisect(breaks, x) - 1]
+        # the original SPFlow histogram implementation subtracts 1 here
+        idx = bisect.bisect(breaks, x)
+
+        if 'verbose' in kwargs and kwargs['verbose'] == True:
+            print(f'_summed_histogram_lh idx={idx}')
+
+
+        probs[i] = densities[idx]
 
 
     return probs
@@ -69,7 +76,7 @@ def _summed_histogram_llh(node, data=None, dtype=np.float64, **kwargs):
     nd = data[:, node.scope[0]]
     marg_ids = np.isnan(nd)
 
-    probs[~marg_ids] = _summed_histogram_lh(np.array(node.breaks), np.array(node.densities), nd[~marg_ids])
+    probs[~marg_ids] = _summed_histogram_lh(np.array(node.breaks), np.array(node.densities), nd[~marg_ids], **kwargs)
 
     return np.log(probs)
 
