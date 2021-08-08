@@ -7,7 +7,7 @@ import math
 from spn.io.Text import spn_to_str_ref_graph
 from spn.structure.leaves.histogram.Histograms import Histogram
 import spn.structure as structure
-from spn.structure.Base import Product, Sum
+from spn.structure.Base import Product, Sum, rebuild_scopes_bottom_up
 
 #from rspn.structure.base import Sum
 import rspn.structure.base
@@ -100,6 +100,7 @@ class ConvertedSPN:
         self.old_spn = spn
         self.reduced_histograms = dict()
         self.new_spn = self._convert_spn(spn, table, max_histogram_size, converted_domains)
+        rebuild_scopes_bottom_up(self.new_spn)
 
     def _convert_spn(self, node, table: Table, max_histogram_size, converted_domains):
         if isinstance(node, IdentityNumericLeaf):
@@ -209,7 +210,7 @@ def remap_data(data: pd.DataFrame, attribute_types: dict):
 
     df = data.copy(deep=True)
 
-    print(df)
+    #print(df)
 
     for attr_name in domains.keys():
         col_name = f'line_item_sanitized.{attr_name}'
@@ -285,13 +286,13 @@ if __name__ == '__main__':
 
                 for i, attr_name in enumerate(attributes):
                     attr_range = attribute_ranges[attr_name]
-                    print(f'{i} {attr_name} {attr_range}')
+                    #print(f'{i} {attr_name} {attr_range}')
                     converted_domains[i] = attr_range
 
-                #df = remap_data(data, attribute_types)
+                df = remap_data(data, attribute_types)
                 #print(df)
 
-            print(f'converted_domains={converted_domains}')
+            #print(f'converted_domains={converted_domains}')
 
             mspn = spn.mspn
             converted = ConvertedSPN(mspn, schema.tables[0], args.max_histogram_size, converted_domains=converted_domains)
