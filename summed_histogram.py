@@ -14,6 +14,13 @@ def _check_densities(densities):
 
     bounded = all(0 <= d and d <= 1 for d in densities)
     ascending = all(a <= b for a, b in zip(densities, densities[1:]))
+
+    if not ascending:
+        for a, b in zip(densities, densities[1:]):
+            if a > b:
+                print(f'{a} <= {b} is violated!')
+
+
     return bounded and ascending
 
 
@@ -40,6 +47,16 @@ def get_histogram_to_str(scope_to_attributes):
         return f'{str(node)} Histogram({scope}|[{breaks}];[{probabilities}])\n'
 
     return func
+
+
+def accumulate_probabilities(probabilities):
+    densities = [0]
+
+    for p in probabilities:
+        densities.append(densities[-1] + p)
+
+
+    return densities
 
 
 # inference algorithms

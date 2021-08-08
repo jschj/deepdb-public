@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from cardinality_custom import estimate_expectation
-from summed_histogram import SummedHistogram, get_histogram_to_str, add_summed_histogram_inference_support
+from summed_histogram import SummedHistogram, get_histogram_to_str, add_summed_histogram_inference_support, accumulate_probabilities
 
 
 scope_to_attributes = lambda x: ''
@@ -107,9 +107,10 @@ class ConvertedSPN:
             points = [] # TODO: What's this?
 
             if size > max_histogram_size:
-                raise Exception('unexpected histogram reshape')
-                densities = reshape_histogram(node.return_histogram(), max_histogram_size)
-                breaks = list(range(max_histogram_size + 1))
+                #raise Exception('unexpected histogram reshape')
+                unscaled_densities = reshape_histogram(node.return_histogram(), max_histogram_size)
+                densities = [min(p, 1) for p in accumulate_probabilities(unscaled_densities)]
+                breaks = list(range(len(densities) + 1))
             else:
                 # TODO: Get the domain for this scope. Then remap the values in unique_values with the help
                 # of DomainConverion.convert(...). Those are our breaks. densitites needs to be prepended
@@ -120,12 +121,6 @@ class ConvertedSPN:
                 # clip any numerical errors away
                 densities[-1] = 1
 
-            if node.id == 232 or node.id == 20:
-                print(f'node {node.id} with scope {node.scope}:')
-                print(f'unique_vals={node.unique_vals}')
-                print(f'breaks={breaks}')
-                print(f'probs={densities}')
-                print()
 
             #histogram = Histogram(breaks=breaks, densities=densities, bin_repr_points=points, scope=node.scope)
             histogram = SummedHistogram(breaks=breaks, densities=densities, scope=node.scope)
