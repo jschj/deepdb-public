@@ -8,6 +8,7 @@ from spn.io.Text import spn_to_str_ref_graph
 from spn.structure.leaves.histogram.Histograms import Histogram
 import spn.structure as structure
 from spn.structure.Base import Product, Sum, rebuild_scopes_bottom_up
+from spn.io.Graphics import plot_spn
 
 #from rspn.structure.base import Sum
 import rspn.structure.base
@@ -26,6 +27,8 @@ import pandas as pd
 
 from cardinality_custom import estimate_expectation
 from summed_histogram import SummedHistogram, get_histogram_to_str, add_summed_histogram_inference_support, accumulate_probabilities
+
+import networkx as nx
 
 
 scope_to_attributes = lambda x: ''
@@ -107,6 +110,15 @@ class ConvertedSPN:
             size = len(node.unique_vals)
             points = [] # TODO: What's this?
 
+            # TODO: it's always len(size) + 1 == len(node.prob_sum):
+            #
+
+            #print(f'size={size} prob size={len(node.prob_sum)}')
+            #print(f'prob_sum={node.prob_sum}')
+            #if size != len(node.prob_sum) + 1:
+            #    print(f'ERRRRRRRROR')
+
+
             if size > max_histogram_size:
                 #raise Exception('unexpected histogram reshape')
                 unscaled_densities = reshape_histogram(node.return_histogram(), max_histogram_size)
@@ -116,11 +128,18 @@ class ConvertedSPN:
                 # TODO: Get the domain for this scope. Then remap the values in unique_values with the help
                 # of DomainConverion.convert(...). Those are our breaks. densitites needs to be prepended
                 # with 0s and appended with 1s.
-                breaks = [converted_domains[node.scope[0]].convert(uni) for uni in node.unique_vals]
+                breaks = ([converted_domains[node.scope[0]].convert(uni) for uni in node.unique_vals] +
+                          [converted_domains[node.scope[0]].convert(node.unique_vals[-1] + 1)])
                 #breaks.append(max(breaks) + 1)
                 densities = np.copy(node.prob_sum) #node.return_histogram(copy=True)
                 # clip any numerical errors away
                 densities[-1] = 1
+
+
+            #if len(breaks) != len(densities) + 1:
+            #    print(f'breaks={breaks} densities={densities}')
+            #    print(f'len breaks={len(breaks)} len densities={len(densities)}')
+            #    exit()
 
 
             #histogram = Histogram(breaks=breaks, densities=densities, bin_repr_points=points, scope=node.scope)
@@ -134,10 +153,12 @@ class ConvertedSPN:
         elif isinstance(node, rspn.structure.base.Sum):
             children = [self._convert_spn(child, table, max_histogram_size, converted_domains) for child in node.children]
             result = Sum(weights=node.weights, children=children)
+            result.id = node.id
             return result
         elif isinstance(node, Product):
             children = [self._convert_spn(child, table, max_histogram_size, converted_domains) for child in node.children]
             result = Product(children)
+            result.id = node.id
             return result
         else:
             raise Exception(f'Unsupported node type {type(node)}')
@@ -217,6 +238,26 @@ def remap_data(data: pd.DataFrame, attribute_types: dict):
         df[col_name] = df[col_name].map(domains[attr_name].convert)
 
     return df
+
+
+def my_plot_spn(spn_root):
+    def _add_nodes(node, graph: nx.Graph):
+        graph.add_node(node.id)
+        #print(f'adding node {node.id}')
+
+        if isinstance(node, Sum) or isinstance(node, Product):
+            for child in node.children:
+                graph.add_edge(node.id, child.id)
+                #print(f'adding edge {node.id} -> {child.id}')
+                _add_nodes(child, graph)
+
+
+    g = nx.Graph()
+    _add_nodes(spn_root, g)
+
+    plt.figure()
+    nx.draw(g)
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -301,6 +342,9 @@ if __name__ == '__main__':
                 print(spn_to_str_ref_graph(converted.new_spn, node_to_str=node_to_str))
                 attrs = ';'.join(s for s in scope_to_attributes(converted.new_spn.scope))
                 print(f'# {attrs}')
+
+                #plot_spn(converted.new_spn, 'plot.png')
+                #my_plot_spn(converted.new_spn)
 
             elif args.generate:
                 data: pd.DataFrame = read_table_csv(schema.tables[0], csv_seperator=';')
