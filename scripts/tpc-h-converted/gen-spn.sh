@@ -1,0 +1,1 @@
+python3 rspn_to_xspn.py --dataset tpc-h-converted --pickle_path ../tpc-h-converted/spn_ensembles/ensemble_single_tpc-h-converted_1000000.pkl --csv_path ../tpc-h-converted/line_item_sanitized_converted.csv --sql_queries ../tpc-h-converted/queries/count_queries_leq.sql --max_histogram_size 255 --reduce --print_domains
