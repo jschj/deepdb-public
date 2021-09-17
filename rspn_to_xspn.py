@@ -14,6 +14,7 @@ from spn.io.Graphics import plot_spn
 import rspn.structure.base
 from rspn.structure.leaves import IdentityNumericLeaf
 from schemas.tpc_h.schema import gen_tpc_h_schema
+from schemas.tpc_h_converted.schema import gen_tpc_h_converted_schema
 from evaluation.utils import parse_query
 from ensemble_compilation.graph_representation import QueryType
 
@@ -92,6 +93,64 @@ def reshape_histogram(alphas, m):
     return betas
 
 
+def accumulate_runs(breaks, densities):
+    # A run is a sequence of identical break values. Those should be reduced to a single break value.
+    # The densities corresponding to these breaks are summed up.
+
+    assert (len(breaks) == len(densities) + 1)
+
+    result_breaks = []
+    result_densities = []
+
+    prev_b = 0
+    accum = 0
+
+    for b, prob in zip(breaks, densities):
+        if b == prev_b:
+            accum += prob
+        else:
+            result_breaks.append(prev_b)
+            result_densities.append(accum)
+
+            prev_b = b
+            accum = 0
+
+
+    return result_breaks, result_densities
+
+
+def convert_breaks_for_domain(unique_vals, prob_sum, domain):
+    seal = domain.convert(unique_vals[-1] + 1)
+    converted_breaks = [domain.convert(val) for val in unique_vals] + [seal]
+
+    breaks_range = unique_vals[-1] - unique_vals[0]
+    converted_range = converted_breaks[-1] - converted_breaks[0]
+
+    # Interval can be mapped to non overlapping class breaks, all good!
+    if converted_range >= breaks_range:
+        return converted_breaks, np.copy(prob_sum)
+
+    # It is possible that a sub interval cannot be well mapped to an integral domain. In that case
+    # the breaks that overlap must be combined. The associated probability sum is the most right
+    # probability sum of the original interval.
+
+    prev_val = 0
+
+    for val, prob in zip(unique_vals, prob_sum):
+        if val == prev_val:
+            pass
+        else:
+            pass
+
+
+    print(f'{domain}')
+    print(f'{converted_breaks}')
+    print(f'{unique_vals}')
+    assert (converted_range >= breaks_range), f'{converted_range} {breaks_range}'
+
+    return converted_breaks
+
+
 class ReducedHistogram:
     def __init__(self, old_densities, new_histogram):
         self.old_densities = old_densities
@@ -108,16 +167,7 @@ class ConvertedSPN:
     def _convert_spn(self, node, table: Table, max_histogram_size, converted_domains):
         if isinstance(node, IdentityNumericLeaf):
             size = len(node.unique_vals)
-            points = [] # TODO: What's this?
-
-            # TODO: it's always len(size) + 1 == len(node.prob_sum):
-            #
-
-            #print(f'size={size} prob size={len(node.prob_sum)}')
-            #print(f'prob_sum={node.prob_sum}')
-            #if size != len(node.prob_sum) + 1:
-            #    print(f'ERRRRRRRROR')
-
+            points = [] # NOTE: I don't know what this is, but it does not seem to be used?
 
             if size > max_histogram_size:
                 #raise Exception('unexpected histogram reshape')
@@ -128,18 +178,33 @@ class ConvertedSPN:
                 # TODO: Get the domain for this scope. Then remap the values in unique_values with the help
                 # of DomainConverion.convert(...). Those are our breaks. densitites needs to be prepended
                 # with 0s and appended with 1s.
-                breaks = ([converted_domains[node.scope[0]].convert(uni) for uni in node.unique_vals] +
+                # BUG: the last index is missing
+                # (maybe) BUG: there are cases where the breaks contain 0 sized intervals (how does XSPN handle this?)
+                breaks = ([converted_domains[node.scope[0]].convert(val) for val in node.unique_vals] +
                           [converted_domains[node.scope[0]].convert(node.unique_vals[-1] + 1)])
+                #breaks = convert_breaks_for_domain(node.unique_vals, node.prob_sum, converted_domains[node.scope[0]])
+                # append and seal of breaks, as the upper bound is exclusive
+                breaks.append(breaks[-1] + 1)
                 #breaks.append(max(breaks) + 1)
                 densities = np.copy(node.prob_sum) #node.return_histogram(copy=True)
                 # clip any numerical errors away
                 densities[-1] = 1
 
+                #print(f'======== converting {node.id} {scope_to_attributes(node.scope)} ========')
+                #print(f'domain={}')
+                #print(f'breaks={list(breaks)}')
+                #print(f'densities={list(densities)}')
 
-            #if len(breaks) != len(densities) + 1:
-            #    print(f'breaks={breaks} densities={densities}')
-            #    print(f'len breaks={len(breaks)} len densities={len(densities)}')
-            #    exit()
+                acc_breaks, acc_densities = accumulate_runs(breaks, densities)
+
+                #print(f'acc_breaks={list(acc_breaks)}')
+                #print(f'acc_densities={list(acc_densities)}')
+
+                #if node.id == 6:
+                #    last_val = node.unique_vals[-1] + 1
+                #    print(f'scope={node.scope[0]} unique_vals={node.unique_vals} breaks={breaks}')
+                #    print(f'last={last_val} last_conv={converted_domains[node.scope[0]].convert(last_val)}')
+                #    print(f'prob_sum={node.prob_sum}')
 
 
             #histogram = Histogram(breaks=breaks, densities=densities, bin_repr_points=points, scope=node.scope)
@@ -224,8 +289,8 @@ def remap_domain(column, max_size, is_integral) -> DomainConversion:
     return DomainConversion(min_value, max_value, offset, stretch_factor, is_integral)
 
 
-def remap_data(data: pd.DataFrame, attribute_types: dict):
-    domains = { key: remap_domain(data[f'line_item_sanitized.{key}'], 256,
+def remap_data(data: pd.DataFrame, attribute_types: dict, max_domain_value=255):
+    domains = { key: remap_domain(data[f'line_item_sanitized.{key}'], max_domain_value,
                                   data.dtypes[f'line_item_sanitized.{key}'] == np.int64)
                 for key in attribute_types.keys() }
 
@@ -268,6 +333,9 @@ if __name__ == '__main__':
     parser.add_argument('--eval', action='store_true')
     parser.add_argument('--reduce', action='store_true')
     parser.add_argument('--generate', action='store_true')
+    
+    # some additional debug options
+    parser.add_argument('--print_domains', action='store_true')
 
     parser.add_argument('--count_queries', default=0, type=int)
     parser.add_argument('--dataset', default='abc', help='Which dataset to be used')
@@ -305,6 +373,27 @@ if __name__ == '__main__':
             'shipinstruct': 'smallint',
             'shipmode': 'smallint'
         }
+    elif args.dataset == 'tpc-h-converted':
+        schema = gen_tpc_h_converted_schema(args.csv_path)
+        # TODO: Move this to schema loading!
+        attribute_types = {
+            #'id': 'bigint',
+            'orderkey': 'bigint',
+            'partkey': 'bigint',
+            'suppkey': 'bigint',
+            'linenumber': 'smallint',
+            'quantity': 'numeric(8, 3)',
+            'extendedprices': 'numeric(12, 3)',
+            'discount': 'numeric(8, 3)',
+            'tax': 'numeric(8, 3)',
+            'returnflag': 'smallint',
+            'linestatus': 'smallint',
+            'shipdate': 'bigint',
+            'commitdate': 'bigint',
+            'receiptdate': 'bigint',
+            'shipinstruct': 'smallint',
+            'shipmode': 'smallint'
+        }
     else:
         raise ValueError('Dataset unknown')
 
@@ -321,7 +410,7 @@ if __name__ == '__main__':
             if True:
                 data: pd.DataFrame = read_table_csv(schema.tables[0], csv_seperator=';')
                 attribute_ranges = { key: remap_domain(data[f'line_item_sanitized.{key}'], args.max_histogram_size, data.dtypes[f'line_item_sanitized.{key}'] == np.int64)
-                                        for key in attribute_types.keys() }
+                                     for key in attribute_types.keys() }
                 attributes = schema.tables[0].attributes[0:]
                 converted_domains = dict()
 
@@ -331,9 +420,14 @@ if __name__ == '__main__':
                     converted_domains[i] = attr_range
 
                 df = remap_data(data, attribute_types)
+
+                df.to_csv('line_item_sanitized_converted.csv', sep=';', header=False, index=False)
                 #print(df)
 
             #print(f'converted_domains={converted_domains}')
+            #if args.print_domains:
+            #    for k, v in converted_domains.items():
+            #        print(f'{k}: {v}')
 
             mspn = spn.mspn
             converted = ConvertedSPN(mspn, schema.tables[0], args.max_histogram_size, converted_domains=converted_domains)
