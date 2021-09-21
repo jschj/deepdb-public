@@ -14,6 +14,7 @@ from schemas.tpc_h.schema import gen_tpc_h_schema
 from xspn.compare_spns import compare_tpc_h, compare_spns
 from xspn.schema import get_dataset_schema
 from xspn.conversion import rspn_to_xspn_simple, xspn_to_str
+from xspn.generate_queries import populate_database, generate_queries
 
 
 def _convert_data(dataset: str, csv_path: str, out_file_path: str, max_domain_value: int):
@@ -53,6 +54,11 @@ if __name__ == '__main__':
     parser.add_argument('--pkl_path', type=str, help='')
     parser.add_argument('--xspn', help='', action='store_true')
 
+    parser.add_argument('--gen', help='generates LEQ count queries for random attributes with random values and prints them out', action='store_true')
+    parser.add_argument('--count', help='the number of queries to be generated', type=int, default=100)
+
+    parser.add_argument('--populate', help='populates the database with data from the csv file', action='store_true')
+
     args = parser.parse_args()
 
     if args.convert:
@@ -61,7 +67,7 @@ if __name__ == '__main__':
         _compare_spns(args.dataset, args.query_file, args.spns, args.max_domain_values)
     elif args.xspn:
         schema, attribute_types = get_dataset_schema(args.dataset, args.csv_path)
-        
+
         with open(args.pkl_path, 'rb') as f:
             pkl = pickle.load(f)
 
@@ -73,3 +79,7 @@ if __name__ == '__main__':
                 xspn_str = xspn_to_str(xspn, attributes)
 
                 print(xspn_str)
+    elif args.gen:
+        generate_queries(args.dataset, args.csv_path, args.count)
+    elif args.populate:
+        populate_database(args.dataset, args.csv_path)
