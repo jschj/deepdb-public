@@ -1,6 +1,8 @@
 import argparse
+from datetime import datetime
 import pickle
 import itertools
+import sys
 
 from rspn_to_xspn import remap_data
 from xspn.domain import remap_data_without_types
@@ -14,7 +16,8 @@ from schemas.tpc_h.schema import gen_tpc_h_schema
 from xspn.compare_spns import compare_tpc_h, compare_spns
 from xspn.schema import get_dataset_schema
 from xspn.conversion import rspn_to_xspn_simple, xspn_to_str
-from xspn.generate_queries import populate_database, generate_queries
+from xspn.generate_queries import populate_database, generate_queries, compute_ground_truth
+from xspn.expectation import rspn_expectation, spflow_expectation, original_expectation
 
 
 def _convert_data(dataset: str, csv_path: str, out_file_path: str, max_domain_value: int):
@@ -56,8 +59,12 @@ if __name__ == '__main__':
 
     parser.add_argument('--gen', help='generates LEQ count queries for random attributes with random values and prints them out', action='store_true')
     parser.add_argument('--count', help='the number of queries to be generated', type=int, default=100)
+    parser.add_argument('--as_csv', help='should the queries be generated in CSV format', action='store_true')
+    parser.add_argument('--seed', help='set the seed for the randomly generated queries', type=int, default=123456)
 
     parser.add_argument('--populate', help='populates the database with data from the csv file', action='store_true')
+
+    parser.add_argument('--ground_truth', help='Computes the correct values for the given queries by QUERY_FILE. Requires DATASET, PKL_PATH and QUERY_FILE.', action='store_true')
 
     args = parser.parse_args()
 
@@ -80,6 +87,34 @@ if __name__ == '__main__':
 
                 print(xspn_str)
     elif args.gen:
-        generate_queries(args.dataset, args.csv_path, args.count)
+        generate_queries(args.dataset, args.csv_path, args.count, args.as_csv, args.seed)
     elif args.populate:
         populate_database(args.dataset, args.csv_path)
+    elif args.ground_truth:
+        if args.as_csv:
+            evidence = np.genfromtxt(args.query_file, delimiter=';')
+            # replace -1 with nan
+            evidence = np.where(evidence == -1, np.nan, evidence)
+            #evidence = np.array([evidence[2]])
+        else:
+            raise NotImplementedError('non CSV formats are currently not supported')
+
+        schema, attribute_types = get_dataset_schema(args.dataset, args.csv_path)
+
+        with open(args.pkl_path, 'rb') as f:
+            pkl = pickle.load(f)
+
+            # TODO: output is bugged for multiple SPNs
+            for i, spn in enumerate(pkl.spns):
+                rspn = spn.mspn
+                xspn = rspn_to_xspn_simple(rspn)
+                result = rspn_expectation(xspn, evidence) * 6001215
+                #other_result = spflow_expectation(xspn, evidence) * 6001215
+                other_result = original_expectation(rspn, evidence) * 6001215
+                #np.savetxt(sys.stdout.buffer, result, delimiter=';')
+                
+                other_result = other_result.reshape(-1)
+                print(result)
+                print(other_result)
+                delta = other_result - result
+                print(delta)
