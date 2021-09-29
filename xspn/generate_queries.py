@@ -82,24 +82,41 @@ def populate_database(dataset, csv_path):
     _populate_database(schema=schema, attr_types=attr_types, db_name=db_name, csv_path=csv_path)
 
 
-def generate_queries(dataset, csv_path, count=100):
+def generate_queries(dataset, csv_path, count=100, as_csv=False, seed=123456):
     schema, attribute_types, _, table_name = _get_db_and_table_name(dataset, csv_path)
+    random.seed(seed)
 
     for table in schema.tables:
         # remove 'index' column
-        attributes = table.attributes[1:]
+        #attributes: list[str] = table.attributes[1:]
+        attributes: list[str] = table.attributes
         table_name: str = table.table_name
 
         data: pd.DataFrame = read_table_csv(table, csv_seperator=';')
 
-        # generate LEQ queries
-        attribute_ranges = { key: Domain(data[f'{table_name}.{key}'], data.dtypes[f'{table_name}.{key}'] == np.int64)
-                            for key in attribute_types.keys() }
+        if as_csv:
+            attribute_ranges = [Domain(data[f'{table_name}.{key}'], data.dtypes[f'{table_name}.{key}'] == np.int64)
+                                for key in attribute_types.keys()]
 
-        for _ in range(count):
-            random.shuffle(attributes)
-            n = random.randint(1, 4)
-            attrs = attributes[0:n]
-            op = random.choice(['<=', '>='])
-            cond = ' AND '.join(f'{attr} {random.choice(["<="])} {attribute_ranges[attr].sample()}' for attr in attrs)
-            print(f'SELECT COUNT(*) FROM {table_name} WHERE {cond};')
+            for _ in range(count):
+                indices = [i for i, _ in enumerate(attributes)]
+                random.shuffle(indices)
+                selected_indices = indices[0:random.randint(1, 4)]
+                values = [attribute_ranges[i].sample() if i in selected_indices else -1 for i in range(len(attributes))]
+                print(';'.join(str(val) for val in values))
+        else:
+            attribute_ranges = {key: Domain(data[f'{table_name}.{key}'], data.dtypes[f'{table_name}.{key}'] == np.int64)
+                                for key in attribute_types.keys()}
+
+            for _ in range(count):
+                random.shuffle(attributes)
+                n = random.randint(1, 4)
+                attrs = attributes[0:n]
+                cond = ' AND '.join(f'{attr} {random.choice(["<="])} {attribute_ranges[attr].sample()}' for attr in attrs)
+                print(f'SELECT COUNT(*) FROM {table_name} WHERE {cond};')
+
+
+def compute_ground_truth(dataset, csv_path, query_file: str, as_csv=False) -> pd.DataFrame:
+    
+
+    pass
