@@ -15,20 +15,27 @@ from data_preparation.prepare_single_tables import read_table_csv
 from schemas.tpc_h.schema import gen_tpc_h_schema
 from xspn.compare_spns import compare_tpc_h, compare_spns
 from xspn.schema import get_dataset_schema
-from xspn.conversion import rspn_to_xspn_simple, xspn_to_str
+from xspn.conversion import rspn_to_str, rspn_to_xspn_simple, xspn_to_str
 from xspn.generate_queries import populate_database, generate_queries, compute_ground_truth
 from xspn.expectation import rspn_expectation, spflow_expectation, original_expectation
 
 
-def _convert_data(dataset: str, csv_path: str, out_file_path: str, max_domain_value: int):
+def _convert_data(dataset: str, csv_path: str, out_file_path: str, max_domain_values: list[int]):
     schema, attribute_types = get_dataset_schema(dataset, csv_path)
-    df = read_table_csv(schema.tables[0], csv_seperator=';')
-    remapped_df = remap_data(df, attribute_types, max_domain_value)
-    remapped_df.to_csv(out_file_path, sep=';', header=False)
+    
+    # TODO: not implemented
+    assert len(schema.tables) == 1
+    assert len(schema.tables) == len(max_domain_values)
+
+    for table, _max_domain_value in zip(schema.tables, max_domain_values):
+        max_domain_value = int(_max_domain_value)
+        df = read_table_csv(table, csv_seperator=';')
+        remapped_df = remap_data(df, attribute_types, max_domain_value)
+        remapped_df.to_csv(out_file_path, sep=';', header=False, index=False)
 
 
 def _compare_spns(dataset: str, query_file_path: str, spn_paths: list[str], max_domain_values: list[int]):
-    schema, attribute_types = get_dataset_schema(dataset, '../tpc-h/line_item_sanitized.csv')
+    schema, attribute_types = get_dataset_schema(dataset, '../tpc-h/lineitem.csv')
     df = read_table_csv(schema.tables[0], csv_seperator=';')
     result = np.array(compare_spns(query_file_path, df, [path for path in spn_paths], [int(val) for val in max_domain_values], schema, attribute_types))
     result *= 6001215
@@ -37,6 +44,12 @@ def _compare_spns(dataset: str, query_file_path: str, spn_paths: list[str], max_
         print(f'{spn_path} with max domain value {max_domain_value} results in:')
         print(list((result[0] - res) / result[0]))
 
+
+def _print_stats(node):
+    
+
+
+    pass
 
 
 if __name__ == '__main__':
@@ -55,7 +68,8 @@ if __name__ == '__main__':
     parser.add_argument('--query_file', type=str)
 
     parser.add_argument('--pkl_path', type=str, help='')
-    parser.add_argument('--xspn', help='', action='store_true')
+    parser.add_argument('--xspn', help='Converts the given RSPN to a XSPN and prints the graph string to stdout. Requires pkl_path, dataset, csv_path', action='store_true')
+    parser.add_argument('--size', help='The size of each histogram probability table.', type=int, default=256)
 
     parser.add_argument('--gen', help='generates LEQ count queries for random attributes with random values and prints them out', action='store_true')
     parser.add_argument('--count', help='the number of queries to be generated', type=int, default=100)
@@ -69,7 +83,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.convert:
-        _convert_data(args.dataset, args.csv_path, args.out_file, args.max_domain_value)
+        _convert_data(args.dataset, args.csv_path, args.out_file, args.max_domain_values)
     elif args.compare:
         _compare_spns(args.dataset, args.query_file, args.spns, args.max_domain_values)
     elif args.xspn:
@@ -80,7 +94,7 @@ if __name__ == '__main__':
 
             for i, spn in enumerate(pkl.spns):
                 rspn = spn.mspn
-                xspn = rspn_to_xspn_simple(rspn)
+                xspn = rspn_to_xspn_simple(rspn, args.size)
                 # NOTE: Experimental!
                 attributes = list(itertools.chain(*[table.attributes for table in schema.tables]))
                 xspn_str = xspn_to_str(xspn, attributes)
@@ -107,14 +121,19 @@ if __name__ == '__main__':
             # TODO: output is bugged for multiple SPNs
             for i, spn in enumerate(pkl.spns):
                 rspn = spn.mspn
-                xspn = rspn_to_xspn_simple(rspn)
-                result = rspn_expectation(xspn, evidence) * 6001215
-                #other_result = spflow_expectation(xspn, evidence) * 6001215
-                other_result = original_expectation(rspn, evidence) * 6001215
-                #np.savetxt(sys.stdout.buffer, result, delimiter=';')
-                
-                other_result = other_result.reshape(-1)
-                print(result)
-                print(other_result)
-                delta = other_result - result
-                print(delta)
+                attributes = list(itertools.chain(*[table.attributes for table in schema.tables]))
+                xspn = rspn_to_xspn_simple(rspn, args.size)
+                # implementation truthful to the FPGA implementation
+                evidence_nan_replaced = np.where(np.isnan(evidence), args.size - 1, evidence)
+                result = rspn_expectation(xspn, evidence_nan_replaced + 1)
+                # DeepDBs implementation
+                original_result = original_expectation(rspn, evidence).reshape(-1)
+
+                # small sanity check
+                delta: np.ndarray = np.abs(original_result - result)
+
+                # print the test result to stdout
+                np.savetxt(sys.stdout.buffer, original_result, delimiter=';')
+
+                #print(f'org={original_result}')
+                #print(f'our={result}')

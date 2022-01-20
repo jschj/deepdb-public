@@ -4,6 +4,7 @@ import numpy as np
 import math
 
 from summed_histogram import SummedHistogram
+from xspn.cumulative_histogram import CumulativeHistogram, _cumulative_histogram_llh
 
 from ensemble_compilation.graph_representation import Query, SchemaGraph, Table
 from rspn.algorithms.expectations import expectation_recursive, expectation_recursive_batch
@@ -18,6 +19,10 @@ from spn.algorithms.Inference import likelihood
 
 
 def _histogram_interval_prob(node: SummedHistogram, bound: int) -> float:
+    # returns P(x < bound)
+
+    return node.densities[int(bound)]
+
     unique_vals = node.breaks
 
     if bound == np.inf:
@@ -28,13 +33,26 @@ def _histogram_interval_prob(node: SummedHistogram, bound: int) -> float:
     if higher_idx >= len(node.densities):
         return 1
 
+    #print(f'unique_vals={unique_vals} higher_idx={higher_idx} bound={int(bound)}')
+
     return node.densities[higher_idx]
+
+
+def _histogram_interval_prob_alt(node: SummedHistogram, bound: int) -> float:
+    idx = int(bound) + 1
+    
+    if idx < 0:
+        return 0
+    elif idx >= len(node.densities):
+        return 1
+    else:
+        return node.densities[idx]
+
 
 
 def _histogram_likelihood(node: SummedHistogram, evidence: np.ndarray) -> np.ndarray:
     assert len(node.scope) == 1
-    # TODO: Temorary no id fix
-    variable = node.scope[0]# - 1
+    variable = node.scope[0]
     result = np.array([1 if np.isnan(row[variable]) else _histogram_interval_prob(node, row[variable])
                        for row in evidence])
 
@@ -57,6 +75,8 @@ def rspn_expectation_recursive(node, evidence: np.ndarray, node_likelihoods: dic
         return np.sum(child_values, axis=0) / weight_sum
     elif isinstance(node, SummedHistogram):
         return node_likelihoods[type(node)](node, evidence)
+    elif isinstance(node, CumulativeHistogram):
+        return node_likelihoods[type(node)](node, evidence)
     else:
         raise Exception('unexpected node type')
 
@@ -64,7 +84,8 @@ def rspn_expectation_recursive(node, evidence: np.ndarray, node_likelihoods: dic
 
 def rspn_expectation(spn_root, evidence: np.ndarray) -> np.ndarray:
     nlhs = {
-        SummedHistogram: _histogram_likelihood
+        SummedHistogram: _histogram_likelihood,
+        CumulativeHistogram: _cumulative_histogram_llh
     }
 
     return rspn_expectation_recursive(spn_root, evidence, node_likelihoods=nlhs)

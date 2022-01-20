@@ -48,7 +48,7 @@ def expectation(spn, table: Table, query_str, schema):
     leq_conditions = [cond[1].split('<=') for cond in query.conditions]
     scope = set(table.attributes.index(cond[0]) for cond in leq_conditions)
     # TODO: must be array with None's except where there is evidence (NumericRange)
-    
+
     arr = [[None] * len(table.attributes)]
     evidence = np.array(arr)
 

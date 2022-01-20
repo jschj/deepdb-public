@@ -12,8 +12,8 @@ def _check_densities(densities):
     if len(densities) < 2:
         return False
 
-    bounded = all(0 <= d and d <= 1 for d in densities)
-    ascending = all(a <= b for a, b in zip(densities, densities[1:]))
+    bounded = all(0 <= d and d <= 1.00001 for d in densities)
+    ascending = all(a <= b + 0.00001 for a, b in zip(densities, densities[1:]))
 
     if not ascending:
         for a, b in zip(densities, densities[1:]):
